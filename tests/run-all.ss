@@ -6,7 +6,11 @@
   '("tests/test-compat.ss"
     "tests/test-types.ss"
     "tests/test-threading.ss"
-    "tests/test-reader.ss"))
+    "tests/test-reader.ss"
+    "tests/test-runtime.ss"
+    "tests/test-compiler.ss"
+    "tests/test-e2e.ss"
+    "tests/test-extended.ss"))
 
 (define total-pass 0)
 (define total-fail 0)

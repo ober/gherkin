@@ -246,19 +246,34 @@
   ;; adjust: Gambit field index 1 = our field-vec index 0).
   ;; Actually, in Gambit, field 0 is the type itself. Fields start at 1.
   ;; So Gambit |##structure-ref| index 1 = our field-vec[0].
-  (define (|##structure-ref| obj field-index type-desc slot-name)
-    (vector-ref (gerbil-struct-field-vec obj) (fx- field-index 1)))
+  (define |##structure-ref|
+    (case-lambda
+      ((obj field-index)
+       (vector-ref (gerbil-struct-field-vec obj) (fx- field-index 1)))
+      ((obj field-index type-desc slot-name)
+       (vector-ref (gerbil-struct-field-vec obj) (fx- field-index 1)))))
 
-  ;; (|##structure-set!| obj val field-index type-desc slot-name)
-  (define (|##structure-set!| obj val field-index type-desc slot-name)
-    (vector-set! (gerbil-struct-field-vec obj) (fx- field-index 1) val))
+  (define |##structure-set!|
+    (case-lambda
+      ((obj field-index val)
+       (vector-set! (gerbil-struct-field-vec obj) (fx- field-index 1) val))
+      ((obj val field-index type-desc slot-name)
+       (vector-set! (gerbil-struct-field-vec obj) (fx- field-index 1) val))))
 
   ;; Unchecked variants (same implementation, just skip validation)
-  (define (|##unchecked-structure-ref| obj field-index type-desc slot-name)
-    (vector-ref (gerbil-struct-field-vec obj) (fx- field-index 1)))
+  (define |##unchecked-structure-ref|
+    (case-lambda
+      ((obj field-index)
+       (vector-ref (gerbil-struct-field-vec obj) (fx- field-index 1)))
+      ((obj field-index type-desc slot-name)
+       (vector-ref (gerbil-struct-field-vec obj) (fx- field-index 1)))))
 
-  (define (|##unchecked-structure-set!| obj val field-index type-desc slot-name)
-    (vector-set! (gerbil-struct-field-vec obj) (fx- field-index 1) val))
+  (define |##unchecked-structure-set!|
+    (case-lambda
+      ((obj field-index val)
+       (vector-set! (gerbil-struct-field-vec obj) (fx- field-index 1) val))
+      ((obj val field-index type-desc slot-name)
+       (vector-set! (gerbil-struct-field-vec obj) (fx- field-index 1) val))))
 
   ;; (|##structure-instance-of?| obj type-id)
   ;; Checks if obj is a structure whose type (or any ancestor type) has the
