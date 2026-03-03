@@ -56,4 +56,3 @@ tests/
     test-types.ss       Type system tests
     test-threading.ss   Threading tests
 ```
-# gherkin
