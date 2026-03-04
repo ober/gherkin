@@ -2372,6 +2372,7 @@
       (:std/net/httpd    . (compat std-net-httpd))
       (:std/db/dbi       . (compat std-db-dbi))
       (:std/stxutil      . (compat std-stxutil))
+      (:std/disasm       . (compat std-disasm))
       (:std/iter        . #f)  ;; stripped — Gherkin compiles for-loops natively
       (:std/error       . (runtime error))
       (:std/os/signal   . (compat signal))
