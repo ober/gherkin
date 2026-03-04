@@ -10,7 +10,8 @@
     "tests/test-runtime.ss"
     "tests/test-compiler.ss"
     "tests/test-e2e.ss"
-    "tests/test-extended.ss"))
+    "tests/test-extended.ss"
+    "tests/test-gxi.ss"))
 
 (define total-pass 0)
 (define total-fail 0)
