@@ -808,10 +808,14 @@
              (and entry (cdr entry))))))
 
   ;; --- Dot notation: self.field ---
+  ;; Only treat as dot-notation if the left side starts with a lowercase
+  ;; letter (object variables). Symbols starting with uppercase like
+  ;; CompletionItemKind.Snippet are constant names, not slot access.
   (define (dot-notation? sym)
     (and (symbol? sym)
          (let ((s (symbol->string sym)))
            (and (> (string-length s) 2)
+                (char-lower-case? (string-ref s 0))
                 (let lp ((i 1))
                   (cond
                     ((>= i (- (string-length s) 1)) #f)
