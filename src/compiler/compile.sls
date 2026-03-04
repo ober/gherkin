@@ -465,7 +465,14 @@
   (define (compile-case-clause clause)
     (if (eq? (car clause) 'else)
       `(else ,@(map gerbil-compile-expression (cdr clause)))
-      `(,(car clause) ,@(map gerbil-compile-expression (cdr clause)))))
+      ;; Compile datums: convert keyword objects to symbols
+      (let ((datums (map (lambda (d)
+                           (cond
+                             ((|##keyword?| d)
+                              (string->symbol (string-append (|##keyword->string| d) ":")))
+                             (else d)))
+                         (car clause))))
+        `(,datums ,@(map gerbil-compile-expression (cdr clause))))))
 
   ;; --- quasiquote compilation ---
   (define (compile-quasiquote expr)
@@ -1718,7 +1725,8 @@
       ;; resolve to "lsp/analysis/parser", strip the package prefix ("lsp/"),
       ;; then flatten slashes to hyphens → "analysis-parser".
       (define (resolve-with-context rel-path)
-        (let* ((name (normalize-relative-path rel-path))
+        (let* ((rel-str (if (string? rel-path) rel-path (symbol->string rel-path)))
+               (name (normalize-relative-path rel-str))
                ;; If source-dir has more than the package prefix, resolve relative
                (pkg-str (symbol->string default-pkg))
                (pkg-prefix (string-append pkg-str "/"))
@@ -1733,8 +1741,7 @@
                        ;; For ./parser: subdir="analysis", name="parser" → "analysis-parser"
                        ;; For ../util/log: name="util-log" (already normalized)
                        ;; Only prepend subdir for ./ (same-dir) imports, not ../ (parent-dir)
-                       (if (string-prefix-ci? "./" (if (string? rel-path) rel-path
-                                                       (symbol->string rel-path)))
+                       (if (string-prefix-ci? "./" rel-str)
                          (string-append subdir "-" name)
                          name)
                        name))
