@@ -72,6 +72,9 @@
            ;; export
            ((eq? head 'export)
             form) ;; pass through for now
+           ;; interface
+           ((eq? head 'interface)
+            (compile-interface form))
            ;; defvalues
            ((eq? head 'defvalues)
             (compile-defvalues form))
@@ -1006,6 +1009,78 @@
         ;; Fallback: just compile body
         (else
          `(begin ,@(map gerbil-compile-expression body))))))
+
+  ;; --- interface compilation ---
+  ;; (interface Name (method1 arg1 ...) (method2 arg1 ...))
+  ;; (interface (Name Parent1 Parent2) (method arg ...))
+  ;; Generates:
+  ;;   - Name-method dispatchers that call call-method
+  ;;   - Name? predicate (always #t for duck typing)
+  ;;   - is-Name? satisfies predicate
+  ;;   - make-Name constructor (identity — relies on duck typing)
+  (define (compile-interface form)
+    (let* ((spec (cadr form))
+           (name (if (pair? spec) (car spec) spec))
+           (methods-raw (cddr form))
+           ;; Parse method specs, stripping => type annotations
+           (methods (let lp ((ms methods-raw) (result '()))
+                      (cond
+                        ((null? ms) (reverse result))
+                        ;; Skip => type annotation at end
+                        ((eq? (car ms) '=>) (reverse result))
+                        ((pair? (car ms))
+                         (lp (cdr ms) (cons (car ms) result)))
+                        (else (lp (cdr ms) result)))))
+           (name-str (symbol->string name)))
+      `(begin
+         ;; Predicate (duck-typing: anything can satisfy an interface)
+         (define (,(string->symbol (string-append name-str "?")) obj)
+           (and (|##structure?| obj) #t))
+         ;; Satisfies predicate
+         (define (,(string->symbol (string-append "is-" name-str "?")) obj)
+           (and (|##structure?| obj) #t))
+         ;; Constructor (identity for duck typing)
+         (define (,(string->symbol (string-append "make-" name-str)) obj) obj)
+         ;; Try-constructor (identity, returns #f on failure)
+         (define (,(string->symbol (string-append "try-" name-str)) obj)
+           (if (|##structure?| obj) obj #f))
+         ;; Method dispatchers
+         ,@(map (lambda (method-spec)
+                  (let* ((method-name (car method-spec))
+                         (args (cdr method-spec))
+                         ;; Strip type annotations from args
+                         (clean-args (let lp ((as args) (result '()))
+                                       (cond
+                                         ((null? as) (reverse result))
+                                         ;; Skip : type and :? type annotations
+                                         ((memq (car as) '(: :? =>))
+                                          (if (pair? (cdr as))
+                                            (lp (cddr as) result)
+                                            (lp (cdr as) result)))
+                                         ;; Skip keyword-like symbols
+                                         ((and (symbol? (car as))
+                                               (let ((s (symbol->string (car as))))
+                                                 (and (> (string-length s) 0)
+                                                      (char=? (string-ref s (- (string-length s) 1)) #\:))))
+                                          ;; keyword: value pair
+                                          (if (pair? (cdr as))
+                                            (lp (cddr as) result)
+                                            (lp (cdr as) result)))
+                                         (else
+                                          (let ((arg (car as)))
+                                            (lp (cdr as)
+                                                (cons (if (pair? arg) (car arg) arg)
+                                                      result)))))))
+                         (disp-name (string->symbol
+                                      (string-append name-str "-"
+                                                     (symbol->string method-name)))))
+                    `(define (,disp-name obj ,@clean-args)
+                       (call-method obj ',(compile-method-symbol method-name)
+                                    ,@clean-args))))
+                methods))))
+
+  ;; Compile method name symbol - strip trailing ! if present for method lookup
+  (define (compile-method-symbol sym) sym)
 
   ;; --- defrules compilation ---
   (define (compile-defrules form)
@@ -2183,6 +2258,20 @@
                                        (string=? s (string-append prefix "::t")))))
                                all-names)))
                 (lp (cdr exps) (append (reverse struct-names) result))))
+             ((and (pair? (car exps)) (eq? (caar exps) 'interface-out))
+              ;; (interface-out Name) → expand to all interface-generated names
+              (let* ((iface-name (cadar exps))
+                     (prefix (symbol->string iface-name))
+                     (iface-names
+                       (filter (lambda (n)
+                                 (let ((s (symbol->string n)))
+                                   (or (string=? s (string-append "make-" prefix))
+                                       (string=? s (string-append "try-" prefix))
+                                       (string=? s (string-append prefix "?"))
+                                       (string=? s (string-append "is-" prefix "?"))
+                                       (string-prefix? (string-append prefix "-") s))))
+                               all-names)))
+                (lp (cdr exps) (append (reverse iface-names) result))))
              ((symbol? (car exps))
               (lp (cdr exps) (cons (car exps) result)))
              (else
