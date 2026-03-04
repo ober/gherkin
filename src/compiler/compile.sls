@@ -1496,7 +1496,15 @@
     (let ((import-map (if (pair? rest) (car rest) '()))
           (base-imports (if (and (pair? rest) (pair? (cdr rest)))
                          (cadr rest)
-                         '((chezscheme)))))
+                         '((chezscheme))))
+          ;; Extract source directory from input-path for relative import resolution
+          (source-dir (let ((s (if (string? input-path) input-path "")))
+                        (let lp ((i (- (string-length s) 1)))
+                          (cond
+                            ((< i 0) "")
+                            ((char=? (string-ref s i) #\/)
+                             (substring s 0 i))
+                            (else (lp (- i 1))))))))
       ;; Compile a Gerbil file to a Chez library
       (let ((forms (read-all-forms input-path))
             (imports '())
@@ -1525,7 +1533,8 @@
           `(library ,lib-name
              (export ,@(compile-exports exports compiled-body))
              (import ,@base-imports
-                     ,@(compile-library-imports imports import-map base-imports))
+                     ,@(compile-library-imports imports import-map base-imports
+                                                source-dir))
              ,@compiled-body)))))
 
   ;; --- R6RS body reordering ---
@@ -1650,16 +1659,18 @@
   (define (compile-library-imports imports import-map . rest)
     ;; Convert Gerbil import specs to Chez library imports
     ;; Uses import-map (merged with defaults) to resolve paths
-    ;; Optional rest arg: base-imports to deduplicate against
-    (let* ((effective-map (append import-map *default-import-map*))
+    ;; Optional rest args: base-imports to deduplicate against, source-dir for relative imports
+    (let* ((base-imports (if (pair? rest) (car rest) '()))
+           (source-dir (if (and (pair? rest) (pair? (cdr rest)))
+                         (cadr rest)
+                         ""))
+           (effective-map (append import-map *default-import-map*))
            ;; Extract library names already covered by base imports
-           (base-libs (if (pair? rest)
-                        (map import-spec-library-name (car rest))
-                        '())))
+           (base-libs (map import-spec-library-name base-imports)))
       (let lp ((imports imports) (result '()) (seen '()))
         (if (null? imports)
           (reverse result)
-          (let ((resolved (resolve-import (car imports) effective-map)))
+          (let ((resolved (resolve-import (car imports) effective-map source-dir)))
             (if (or (not resolved)
                     (member resolved seen)
                     ;; Skip if this library is already in base imports
@@ -1699,8 +1710,36 @@
     (let ((entry (assq '*default-package* import-map)))
       (if entry (cdr entry) 'gsh)))
 
-  (define (resolve-import imp import-map)
-    (let ((default-pkg (get-default-package import-map)))
+  (define (resolve-import imp import-map . rest)
+    (let ((default-pkg (get-default-package import-map))
+          (source-dir (if (pair? rest) (car rest) "")))
+      ;; Resolve a relative path using source directory context.
+      ;; For ./parser from lsp/analysis/symbols.ss (source-dir="lsp/analysis"),
+      ;; resolve to "lsp/analysis/parser", strip the package prefix ("lsp/"),
+      ;; then flatten slashes to hyphens → "analysis-parser".
+      (define (resolve-with-context rel-path)
+        (let* ((name (normalize-relative-path rel-path))
+               ;; If source-dir has more than the package prefix, resolve relative
+               (pkg-str (symbol->string default-pkg))
+               (pkg-prefix (string-append pkg-str "/"))
+               (full-path
+                 (if (and (> (string-length source-dir) 0)
+                          (string-prefix-ci? pkg-prefix source-dir))
+                   ;; source-dir is "lsp/analysis", strip "lsp/" → "analysis"
+                   (let ((subdir (substring source-dir
+                                   (string-length pkg-prefix)
+                                   (string-length source-dir))))
+                     (if (> (string-length subdir) 0)
+                       ;; For ./parser: subdir="analysis", name="parser" → "analysis-parser"
+                       ;; For ../util/log: name="util-log" (already normalized)
+                       ;; Only prepend subdir for ./ (same-dir) imports, not ../ (parent-dir)
+                       (if (string-prefix-ci? "./" (if (string? rel-path) rel-path
+                                                       (symbol->string rel-path)))
+                         (string-append subdir "-" name)
+                         name)
+                       name))
+                   name)))
+          `(,default-pkg ,(string->symbol full-path))))
       (cond
         ;; String import: "./module" or "../compat/compat"
         ((string? imp)
@@ -1712,8 +1751,8 @@
                     (mapped2 (assq-string (string-append "./" name) import-map)))
                (if mapped2
                  (cdr mapped2)
-                 ;; Default: project-local module
-                 `(,default-pkg ,(string->symbol name)))))))
+                 ;; Default: resolve with source directory context
+                 (resolve-with-context imp))))))
         ;; Symbol import: :std/sugar, :pkg/ast, ./foo, ../bar/baz, etc.
         ((symbol? imp)
          (let* ((s (symbol->string imp))
@@ -1722,11 +1761,10 @@
                             (assq-string s import-map))))
            (cond
              (mapped (cdr mapped))
-             ;; ./ or ../ relative import → normalize and use default package
+             ;; ./ or ../ relative import → resolve with source directory context
              ((or (string-prefix-ci? "./" s)
                   (string-prefix-ci? "../" s))
-              (let ((name (normalize-relative-path s)))
-                `(,default-pkg ,(string->symbol name))))
+              (resolve-with-context imp))
              ;; :pkg/<name> → check if pkg matches default-package or known packages
              ;; Generic :prefix/name pattern → (prefix name)
              ((and (> (string-length s) 1)
@@ -1773,7 +1811,7 @@
          (if (memq (car imp) '(only-in except-in rename-in prefix-in
                                  only except rename prefix))
            ;; Resolve the module part; convert Gerbil names to R6RS
-           (let ((resolved-mod (resolve-import (cadr imp) import-map))
+           (let ((resolved-mod (resolve-import (cadr imp) import-map source-dir))
                  (r6rs-head (case (car imp)
                               ((only-in only) 'only)
                               ((except-in except) 'except)
