@@ -72,6 +72,9 @@
            ;; export
            ((eq? head 'export)
             form) ;; pass through for now
+           ;; defvalues
+           ((eq? head 'defvalues)
+            (compile-defvalues form))
            ;; declare
            ((eq? head 'declare)
             '(begin)) ;; ignore declarations
@@ -244,6 +247,18 @@
                            `(,(car b) ,(gerbil-compile-expression (cadr b))))
                          (cadr expr))
                     ,@(map gerbil-compile-expression (cddr expr))))
+           ;; let-hash
+           ((eq? head 'let-hash)
+            (compile-let-hash expr))
+           ;; let/cc
+           ((eq? head 'let/cc)
+            (compile-let/cc expr))
+           ;; awhen
+           ((eq? head 'awhen)
+            (compile-awhen expr))
+           ;; and-let*
+           ((eq? head 'and-let*)
+            (compile-and-let* expr))
            ;; when / unless
            ((memq head '(when unless))
             `(,head ,(gerbil-compile-expression (cadr expr))
@@ -396,6 +411,14 @@
                   ;; anything else → compile and convert at runtime
                   (else `(gensym (let ((x ,(gerbil-compile-expression arg)))
                                    (if (symbol? x) (symbol->string x) x))))))))
+           ;; spawn / spawn/name
+           ((eq? head 'spawn)
+            (compile-spawn expr))
+           ((eq? head 'spawn/name)
+            (compile-spawn/name expr))
+           ;; with-lock
+           ((eq? head 'with-lock)
+            (compile-with-lock expr))
            ;; void
            ((eq? head 'void)
             '(void))
@@ -913,6 +936,223 @@
                                  (let* ,default-bindings
                                    ,@compiled-body))
                                clauses))))))))))))
+
+  ;; --- defvalues compilation ---
+  (define (compile-defvalues form)
+    ;; (defvalues (a b c) expr) → (define-values (a b c) expr)
+    (let ((vars (cadr form))
+          (expr (caddr form)))
+      `(define-values ,vars ,(gerbil-compile-expression expr))))
+
+  ;; --- let-hash compilation ---
+  (define (compile-let-hash form)
+    ;; (let-hash ht-expr body...)
+    ;; Inside body, symbols starting with . are transformed:
+    ;;   .x  → (hash-ref ht 'x)     ; strong accessor (error if missing)
+    ;;   .?x → (hash-get ht 'x)     ; weak accessor (#f if missing)
+    ;;   .$x → (hash-get ht "x")    ; string weak accessor
+    ;;   ..x → .x                    ; escape (literal dot symbol)
+    (let ((ht-expr (cadr form))
+          (body (cddr form))
+          (ht-var (gensym "ht")))
+      `(let ((,ht-var ,(gerbil-compile-expression ht-expr)))
+         ,@(map (lambda (b) (compile-let-hash-expr b ht-var)) body))))
+
+  (define (compile-let-hash-expr expr ht-var)
+    ;; Walk expression, replacing .field symbols with hash lookups
+    (cond
+      ((and (symbol? expr) (let-hash-accessor? expr))
+       (compile-let-hash-ref expr ht-var))
+      ((not (pair? expr))
+       (gerbil-compile-expression expr))
+      (else
+       ;; Recursively walk the form, but handle special forms properly
+       (let ((head (car expr)))
+         (cond
+           ;; Nested let-hash: don't transform .refs in inner body
+           ((eq? head 'let-hash)
+            (gerbil-compile-expression expr))
+           ;; quote: don't transform
+           ((eq? head 'quote) expr)
+           ;; lambda: transform body but not params
+           ((eq? head 'lambda)
+            `(lambda ,(cadr expr)
+               ,@(map (lambda (b) (compile-let-hash-expr b ht-var)) (cddr expr))))
+           ;; let/let*/letrec: transform init exprs and body
+           ((memq head '(let let* letrec letrec*))
+            (compile-let-hash-let head expr ht-var))
+           ;; General: transform all subforms
+           (else
+            (map (lambda (e) (compile-let-hash-expr e ht-var)) expr)))))))
+
+  (define (compile-let-hash-let head expr ht-var)
+    ;; Handle let forms inside let-hash: transform init exprs and body
+    (let ((bindings-or-name (cadr expr)))
+      (cond
+        ;; named let
+        ((symbol? bindings-or-name)
+         `(,head ,bindings-or-name
+            ,(map (lambda (b)
+                    `(,(car b) ,(compile-let-hash-expr (cadr b) ht-var)))
+                  (caddr expr))
+            ,@(map (lambda (b) (compile-let-hash-expr b ht-var)) (cdddr expr))))
+        ;; Gerbil single binding: (let (x expr) body...)
+        ((and (pair? bindings-or-name)
+              (symbol? (car bindings-or-name))
+              (not (pair? (car bindings-or-name))))
+         `(,head ((,(car bindings-or-name)
+                   ,(compile-let-hash-expr (cadr bindings-or-name) ht-var)))
+                 ,@(map (lambda (b) (compile-let-hash-expr b ht-var)) (cddr expr))))
+        ;; Standard bindings
+        (else
+         `(,head ,(map (lambda (b)
+                         `(,(car b) ,(compile-let-hash-expr (cadr b) ht-var)))
+                       bindings-or-name)
+                 ,@(map (lambda (b) (compile-let-hash-expr b ht-var)) (cddr expr)))))))
+
+  (define (let-hash-accessor? sym)
+    ;; Check if symbol starts with . (but not ..)
+    (let ((s (symbol->string sym)))
+      (and (> (string-length s) 1)
+           (char=? (string-ref s 0) #\.))))
+
+  (define (compile-let-hash-ref sym ht-var)
+    ;; Transform a .field symbol into a hash lookup
+    (let ((s (symbol->string sym)))
+      (cond
+        ;; ..x → escape, reference .x literally
+        ((and (> (string-length s) 2)
+              (char=? (string-ref s 1) #\.))
+         (gerbil-compile-expression
+           (string->symbol (substring s 1 (string-length s)))))
+        ;; .?x → (hash-get ht 'x) — weak accessor
+        ((and (> (string-length s) 2)
+              (char=? (string-ref s 1) #\?))
+         (let ((field (string->symbol (substring s 2 (string-length s)))))
+           `(hash-get ,ht-var ',field)))
+        ;; .$x → (hash-get ht "x") — string weak accessor
+        ((and (> (string-length s) 2)
+              (char=? (string-ref s 1) #\$))
+         (let ((field-str (substring s 2 (string-length s))))
+           `(hash-get ,ht-var ,field-str)))
+        ;; .x → (hash-ref ht 'x) — strong accessor
+        (else
+         (let ((field (string->symbol (substring s 1 (string-length s)))))
+           `(hash-ref ,ht-var ',field))))))
+
+  ;; --- let/cc compilation ---
+  (define (compile-let/cc form)
+    ;; (let/cc k body...) → (call/cc (lambda (k) body...))
+    (let ((var (cadr form))
+          (body (cddr form)))
+      `(call/cc (lambda (,var) ,@(map gerbil-compile-expression body)))))
+
+  ;; --- awhen compilation ---
+  (define (compile-awhen form)
+    ;; (awhen (var test) body...) → (let ((var test)) (when var body...))
+    (let ((binding (cadr form))
+          (body (cddr form)))
+      (let ((var (car binding))
+            (test (cadr binding)))
+        `(let ((,var ,(gerbil-compile-expression test)))
+           (when ,var ,@(map gerbil-compile-expression body))))))
+
+  ;; --- and-let* compilation ---
+  (define (compile-and-let* form)
+    ;; (and-let* ((var expr) ...) body...)
+    ;; Short-circuiting let*: if any binding is #f, return #f
+    (let ((bindings (cadr form))
+          (body (cddr form)))
+      (if (null? bindings)
+        `(begin ,@(map gerbil-compile-expression body))
+        (let lp ((bindings bindings))
+          (let ((binding (car bindings))
+                (rest (cdr bindings)))
+            (cond
+              ;; (pred?) — bare test, no binding
+              ((and (pair? binding) (null? (cdr binding)))
+               (let ((test (gerbil-compile-expression (car binding))))
+                 (if (null? rest)
+                   `(and ,test (begin ,@(map gerbil-compile-expression body)))
+                   `(and ,test ,(lp rest)))))
+              ;; (var expr) — binding with test
+              ((pair? binding)
+               (let ((var (car binding))
+                     (init (gerbil-compile-expression (cadr binding))))
+                 (if (null? rest)
+                   `(let ((,var ,init))
+                      (and ,var (begin ,@(map gerbil-compile-expression body))))
+                   `(let ((,var ,init))
+                      (and ,var ,(lp rest))))))
+              ;; bare symbol — just test truthiness
+              (else
+               (let ((test (gerbil-compile-expression binding)))
+                 (if (null? rest)
+                   `(and ,test (begin ,@(map gerbil-compile-expression body)))
+                   `(and ,test ,(lp rest)))))))))))
+
+  ;; --- spawn / spawn/name compilation ---
+  (define (compile-spawn form)
+    ;; (spawn expr) → (thread-start! (make-thread (lambda () expr)))
+    ;; (spawn thunk) → (thread-start! (make-thread thunk))
+    ;; (spawn proc arg...) → (thread-start! (make-thread (lambda () (proc arg...))))
+    (let ((args (cdr form)))
+      (if (= (length args) 1)
+        ;; Single arg: could be a thunk or expression
+        (let ((arg (car args)))
+          (if (and (pair? arg) (memq (car arg) '(lambda #%lambda)))
+            ;; Already a lambda — use directly
+            `(thread-start! (make-thread ,(gerbil-compile-expression arg)))
+            ;; Wrap in thunk
+            `(thread-start! (make-thread (lambda () ,(gerbil-compile-expression arg))))))
+        ;; Multiple args: (spawn proc arg1 arg2...) → apply
+        `(thread-start!
+           (make-thread
+             (lambda ()
+               (,(gerbil-compile-expression (car args))
+                ,@(map gerbil-compile-expression (cdr args)))))))))
+
+  (define (compile-spawn/name form)
+    ;; (spawn/name name expr) → (thread-start! (make-thread (lambda () expr) name))
+    ;; (spawn/name name proc arg...) → (thread-start! (make-thread (lambda () (proc arg...)) name))
+    (let ((name (gerbil-compile-expression (cadr form)))
+          (args (cddr form)))
+      (if (= (length args) 1)
+        (let ((arg (car args)))
+          (if (and (pair? arg) (memq (car arg) '(lambda #%lambda)))
+            `(thread-start! (make-thread ,(gerbil-compile-expression arg) ,name))
+            `(thread-start! (make-thread (lambda () ,(gerbil-compile-expression arg)) ,name))))
+        `(thread-start!
+           (make-thread
+             (lambda ()
+               (,(gerbil-compile-expression (car args))
+                ,@(map gerbil-compile-expression (cdr args))))
+             ,name)))))
+
+  ;; --- with-lock compilation ---
+  (define (compile-with-lock form)
+    ;; (with-lock mutex body...) → (dynamic-wind (lambda () (mutex-lock! mutex))
+    ;;                                           (lambda () body...)
+    ;;                                           (lambda () (mutex-unlock! mutex)))
+    ;; Also handles: (with-lock mutex thunk) where thunk is already a lambda
+    (let ((mutex-expr (gerbil-compile-expression (cadr form)))
+          (rest (cddr form))
+          (mtx (gensym "mtx")))
+      (if (and (= (length rest) 1)
+               (pair? (car rest))
+               (memq (caar rest) '(lambda #%lambda)))
+        ;; (with-lock mutex (lambda () body...)) — thunk form
+        `(let ((,mtx ,mutex-expr))
+           (dynamic-wind
+             (lambda () (mutex-lock! ,mtx))
+             ,(gerbil-compile-expression (car rest))
+             (lambda () (mutex-unlock! ,mtx))))
+        ;; (with-lock mutex body...) — body form
+        `(let ((,mtx ,mutex-expr))
+           (dynamic-wind
+             (lambda () (mutex-lock! ,mtx))
+             (lambda () ,@(map gerbil-compile-expression rest))
+             (lambda () (mutex-unlock! ,mtx)))))))
 
   ;; --- import compilation ---
   (define (compile-import form)

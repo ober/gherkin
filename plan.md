@@ -248,14 +248,14 @@ Gerbil `equal?` on transparent structs compares fields recursively. Chez needs c
 
 ### Tier 1 — High Impact, Enables Most Projects
 
-1. **`let-hash`** — 470 uses, trivial to compile (hash-ref expansion)
-2. **`let/cc`** — 60 uses, trivial (`call/cc` wrapper)
-3. **`defvalues`** — 56 uses, trivial (`define-values`)
+1. **`let-hash`** — 470 uses, trivial to compile (hash-ref expansion) ✅ DONE
+2. **`let/cc`** — 60 uses, trivial (`call/cc` wrapper) ✅ DONE
+3. **`defvalues`** — 56 uses, trivial (`define-values`) ✅ DONE
 4. **`match` struct patterns** — used in every project with defstruct
 5. **`match` nested patterns + guards** — used extensively
-6. **`spawn`/`spawn/name`** — 195 uses, map to gherkin threading
+6. **`spawn`/`spawn/name`** — 195 uses, map to gherkin threading ✅ DONE
 7. **`defmethod` full form** — needed for any OOP code
-8. **`awhen`/`aif`/`and-let*`** — sugar macros, easy to add
+8. **`awhen`/`aif`/`and-let*`** — sugar macros, easy to add ✅ DONE
 
 ### Tier 2 — Enables Specific Project Categories
 
@@ -264,7 +264,7 @@ Gerbil `equal?` on transparent structs compares fields recursively. Chez needs c
 11. **`:std/text/json` in default map** — already exists in gherkin-lsp
 12. **`:std/misc/ports` compat** — `read-all-as-string`, `copy-port`, etc.
 13. **`:std/xml` compat** — enables gerbil-svg
-14. **`with-lock`** — enables gerbil-persist patterns
+14. **`with-lock`** — enables gerbil-persist patterns ✅ DONE
 
 ### Tier 3 — Completeness
 
@@ -288,16 +288,16 @@ Gerbil `equal?` on transparent structs compares fields recursively. Chez needs c
 
 These could be added to `compile.sls` with minimal effort:
 
-| Form | Compilation Strategy | Est. Lines |
-|------|---------------------|------------|
-| `let-hash` | hash-ref expansion | ~10 |
-| `let/cc` | call/cc wrapper | ~5 |
-| `defvalues` | define-values | ~5 |
-| `spawn` | fork-thread wrapper | ~10 |
-| `with-lock` | dynamic-wind + mutex | ~10 |
-| `awhen`/`aif` | let + when/if expansion | ~10 each |
-| `and-let*` | nested let + and | ~15 |
-| `include` | read-file + splice | ~15 |
+| Form | Compilation Strategy | Est. Lines | Status |
+|------|---------------------|------------|--------|
+| `let-hash` | hash-ref expansion | ~10 | ✅ DONE |
+| `let/cc` | call/cc wrapper | ~5 | ✅ DONE |
+| `defvalues` | define-values | ~5 | ✅ DONE |
+| `spawn` | fork-thread wrapper | ~10 | ✅ DONE |
+| `with-lock` | dynamic-wind + mutex | ~10 | ✅ DONE |
+| `awhen`/`aif` | let + when/if expansion | ~10 each | ✅ DONE |
+| `and-let*` | nested let + and | ~15 | ✅ DONE |
+| `include` | read-file + splice | ~15 | |
 
 The **biggest effort items** are `interface` compilation (~200 lines) and completing `match` patterns (~150 lines for struct/nested/guard support). These two unlock the most projects.
 
