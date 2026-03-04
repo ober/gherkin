@@ -269,12 +269,12 @@ Gerbil `equal?` on transparent structs compares fields recursively. Chez needs c
 ### Tier 3 — Completeness
 
 15. **`:std/text/base64`/`:std/text/hex`** — encoding utilities ✅ DONE
-16. **`:std/sync/completion`/`:std/sync/channel`** — concurrency primitives
+16. **`:std/sync/completion`/`:std/sync/channel`** — concurrency primitives ✅ DONE
 17. **`:std/net/request`** — HTTP client (complex, may need Chez FFI)
 18. **`:std/crypto/digest`** — crypto (needs native library)
 19. **`include` support** — file inlining ✅ DONE
-20. **`export #t`** — re-export all
-21. **Import filters** (`only-in`, `except-in`, `rename-in`)
+20. **`export #t`** — re-export all ✅ DONE (already implemented)
+21. **Import filters** (`only-in`, `except-in`, `rename-in`) ✅ DONE (already implemented)
 
 ### Tier 4 — Advanced (Future)
 

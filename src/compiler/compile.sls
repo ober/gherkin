@@ -2235,6 +2235,10 @@
       (:std/text/json   . (compat json))
       (:std/text/base64 . (compat std-text-base64))
       (:std/text/hex    . (compat std-text-hex))
+      (:std/sync/completion . (compat std-sync-completion))
+      (:std/misc/completion . (compat std-sync-completion))
+      (:std/sync/channel . (compat std-sync-channel))
+      (:std/misc/channel . (compat std-sync-channel))
       (:std/iter        . #f)  ;; stripped — Gherkin compiles for-loops natively
       (:std/error       . (runtime error))
       (:std/os/signal   . (compat signal))
