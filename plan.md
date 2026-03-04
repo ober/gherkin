@@ -299,7 +299,7 @@ These could be added to `compile.sls` with minimal effort:
 | `and-let*` | nested let + and | ~15 | ✅ DONE |
 | `include` | read-file + splice | ~15 | ✅ DONE |
 
-The **biggest effort items** are `interface` compilation (~200 lines) and completing `match` patterns (~150 lines for struct/nested/guard support). These two unlock the most projects.
+All quick wins have been implemented. The `interface` compilation and `match` patterns have also been completed.
 
 ---
 
@@ -314,7 +314,7 @@ For reference, the gherkin compiler already handles these correctly:
 - `try`/`catch`/`finally` exception handling
 - `for`/`for/collect`/`for/fold`/`for/or`/`for/and` iteration
 - `in-range`, `in-iota`, `in-hash-keys`, `in-hash-values`, `in-hash`, `in-string`, `in-vector`
-- `match` (basic: literals, wildcards, predicates, pair destructuring)
+- `match` (full: literals, wildcards, predicates, pairs, structs, vectors, quoted, and/or/not, apply)
 - `hash` literal constructor
 - `@list` (`[...]`) and `@method` (`{...}`) reader forms
 - `self.field` dot notation for slot access
@@ -332,3 +332,24 @@ For reference, the gherkin compiler already handles these correctly:
 - Threading (Gambit API on Chez threads)
 - Hash tables (3-tier: raw, specialized, GC)
 - Keyword interning and dispatch
+- `let-hash`, `let/cc`, `defvalues`, `awhen`, `and-let*` (compiled inline)
+- `spawn`/`spawn/name`, `with-lock` (thread primitives)
+- `interface`/`interface-out` (method dispatch)
+- `defmethod` full form with type annotations
+- `include` (file inlining)
+- `export #t` (re-export all)
+- Import filters (`only-in`, `except-in`, `rename-in`)
+
+**Compat modules (`:std/*` shims):**
+- `:std/test` — test-suite, test-case, check macros, run-tests!
+- `:std/misc/ports` — read-all-as-string, read-file-string, write-file-string
+- `:std/text/json` — JSON parsing/serialization
+- `:std/text/base64` — base64 encoding/decoding
+- `:std/text/hex` — hex encoding/decoding
+- `:std/xml` / `:std/markup/xml` — SXML serialization to XML
+- `:std/sync/completion` — async completion tokens
+- `:std/sync/channel` — buffered message channels
+- `:std/net/request` — HTTP client (via curl)
+- `:std/net/httpd` — HTTP server (API surface)
+- `:std/crypto/digest` — md5, sha1, sha256 (via openssl)
+- `:std/db/dbi` — SQL database interface (SQLite backend)
