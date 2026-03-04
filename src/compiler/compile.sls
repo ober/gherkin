@@ -443,6 +443,56 @@
            ;; string-join, string-split
            ((memq head '(string-join string-split))
             (compile-string-op head expr))
+           ;; Gambit/Gerbil string utilities compiled inline
+           ((eq? head 'string-contains)
+            (compile-string-contains expr))
+           ((eq? head 'string-prefix?)
+            (compile-string-prefix? expr))
+           ((eq? head 'string-suffix?)
+            (compile-string-suffix? expr))
+           ;; read-line: Gambit read-line → Chez get-line
+           ((eq? head 'read-line)
+            (if (null? (cdr expr))
+              '(get-line (current-input-port))
+              `(get-line ,(gerbil-compile-expression (cadr expr)))))
+           ;; pp / pretty-print
+           ((memq head '(pp pretty-print))
+            `(pretty-print ,@(map gerbil-compile-expression (cdr expr))))
+           ;; time->seconds
+           ((eq? head 'time->seconds)
+            (if (null? (cdr expr))
+              ;; (time->seconds) → current time as float
+              '(let ((t (current-time)))
+                 (+ (time-second t)
+                    (/ (time-nanosecond t) 1000000000.0)))
+              ;; (time->seconds t) → convert time object
+              (let ((t (gerbil-compile-expression (cadr expr))))
+                `(let ((t ,t))
+                   (if (time? t)
+                     (+ (time-second t)
+                        (/ (time-nanosecond t) 1000000000.0))
+                     t)))))
+           ;; ##current-time
+           ((eq? head '|##current-time|)
+            '(current-time))
+           ;; make-parameter → Chez make-parameter
+           ((eq? head 'make-parameter)
+            `(make-parameter ,@(map gerbil-compile-expression (cdr expr))))
+           ;; make-will → Chez guardian
+           ((eq? head 'make-will)
+            (compile-make-will expr))
+           ;; subvector
+           ((eq? head 'subvector)
+            (compile-subvector expr))
+           ;; open-input-string / open-output-string / get-output-string
+           ((memq head '(open-input-string open-output-string
+                         get-output-string with-input-from-string))
+            `(,head ,@(map gerbil-compile-expression (cdr expr))))
+           ;; object->u8vector / u8vector->object (Gambit serialization)
+           ((eq? head 'object->u8vector)
+            (compile-object->u8vector expr))
+           ((eq? head 'u8vector->object)
+            (compile-u8vector->object expr))
            ;; default: function application
            (else
             (map gerbil-compile-expression expr)))))))
@@ -1878,6 +1928,98 @@
                   (else (split-lp (+ i 1) start acc)))))))
         (else `(,head ,@args)))))
 
+  ;; --- string-contains compilation ---
+  (define (compile-string-contains expr)
+    ;; (string-contains haystack needle) → index or #f
+    (let ((args (map gerbil-compile-expression (cdr expr))))
+      (let ((hay (gensym "hay"))
+            (ndl (gensym "ndl")))
+        `(let ((,hay ,(car args))
+               (,ndl ,(cadr args)))
+           (let ((hlen (string-length ,hay))
+                 (nlen (string-length ,ndl)))
+             (let lp ((i 0))
+               (cond
+                 ((> (+ i nlen) hlen) #f)
+                 ((string=? (substring ,hay i (+ i nlen)) ,ndl) i)
+                 (else (lp (+ i 1))))))))))
+
+  ;; --- string-prefix? compilation ---
+  (define (compile-string-prefix? expr)
+    (let ((args (map gerbil-compile-expression (cdr expr))))
+      (let ((pfx (gensym "pfx"))
+            (str (gensym "str")))
+        `(let ((,pfx ,(car args))
+               (,str ,(cadr args)))
+           (let ((plen (string-length ,pfx)))
+             (and (<= plen (string-length ,str))
+                  (string=? ,pfx (substring ,str 0 plen))))))))
+
+  ;; --- string-suffix? compilation ---
+  (define (compile-string-suffix? expr)
+    (let ((args (map gerbil-compile-expression (cdr expr))))
+      (let ((sfx (gensym "sfx"))
+            (str (gensym "str")))
+        `(let ((,sfx ,(car args))
+               (,str ,(cadr args)))
+           (let ((slen (string-length ,sfx))
+                 (len (string-length ,str)))
+             (and (<= slen len)
+                  (string=? ,sfx (substring ,str (- len slen) len))))))))
+
+  ;; --- make-will compilation ---
+  (define (compile-make-will expr)
+    ;; (make-will obj action) → Chez guardian
+    ;; Gambit will testators: action is called with obj when obj is GC'd
+    ;; Chez guardians: (guardian obj) registers, (guardian) retrieves
+    ;; We approximate with a guardian
+    (let ((args (map gerbil-compile-expression (cdr expr))))
+      `(let ((g (make-guardian)))
+         (g ,(car args))
+         g)))
+
+  ;; --- subvector compilation ---
+  (define (compile-subvector expr)
+    ;; Gambit (subvector vec start end) → Chez doesn't have direct equivalent
+    ;; Need to build: (let ((v vec)) (vector-copy v start end))
+    ;; But Chez vector-copy is (vector-copy vec) for full copy
+    ;; Use our own implementation
+    (let ((args (map gerbil-compile-expression (cdr expr)))
+          (v (gensym "v")))
+      (case (length args)
+        ((2) `(let ((,v ,(car args)))
+                (let* ((start ,(cadr args))
+                       (end (vector-length ,v))
+                       (len (- end start))
+                       (result (make-vector len)))
+                  (do ((i 0 (+ i 1)))
+                      ((= i len) result)
+                    (vector-set! result i (vector-ref ,v (+ start i)))))))
+        ((3) `(let ((,v ,(car args)))
+                (let* ((start ,(cadr args))
+                       (end ,(caddr args))
+                       (len (- end start))
+                       (result (make-vector len)))
+                  (do ((i 0 (+ i 1)))
+                      ((= i len) result)
+                    (vector-set! result i (vector-ref ,v (+ start i)))))))
+        (else `(error 'subvector "wrong number of arguments")))))
+
+  ;; --- object->u8vector compilation ---
+  (define (compile-object->u8vector expr)
+    ;; Use Chez fasl-write for serialization
+    (let ((obj (gerbil-compile-expression (cadr expr))))
+      `(let ((port (open-output-bytevector)))
+         (fasl-write ',obj port)
+         (get-output-bytevector port))))
+
+  ;; --- u8vector->object compilation ---
+  (define (compile-u8vector->object expr)
+    ;; Use Chez fasl-read for deserialization
+    (let ((bv (gerbil-compile-expression (cadr expr))))
+      `(let ((port (open-input-bytevector ,bv)))
+         (fasl-read port))))
+
   ;; --- Helper: extract property from property list ---
   (define (extract-prop key props default)
     (cond
@@ -2074,6 +2216,9 @@
       (:std/misc/list   . (compat misc))
       (:std/misc/path   . (compat misc))
       (:std/misc/hash   . (compat misc))
+      (:std/misc/ports  . (compat std-misc-ports))
+      (:std/test        . (compat std-test))
+      (:std/text/json   . (compat json))
       (:std/iter        . #f)  ;; stripped — Gherkin compiles for-loops natively
       (:std/error       . (runtime error))
       (:std/os/signal   . (compat signal))
