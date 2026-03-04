@@ -29,6 +29,21 @@
     (compiler compile)
     (boot init))
 
+  ;; --- Import resolution for script/REPL mode ---
+  ;; Resolve Gerbil-style imports (:std/sugar etc.) to Chez library names
+  ;; and evaluate them in the REPL environment.
+  ;; Libraries that don't exist are silently skipped (the compiler handles
+  ;; those forms natively, e.g. :std/sugar → def, defstruct, etc.).
+  (define (eval-import-form form)
+    (let ((specs (cdr form)))  ;; strip 'import head
+      (for-each
+        (lambda (spec)
+          (let ((r (resolve-import spec *default-import-map*)))
+            (when r
+              (guard (exn (#t (void)))  ;; skip if library not found
+                (chez:eval `(import ,r) repl-env)))))
+        specs)))
+
   (define repl-env (interaction-environment))
 
   (define (init-repl-env!)
@@ -100,6 +115,13 @@
         ;; Comma commands: reader turns ,foo into (unquote foo)
         ((and (pair? datum) (eq? (car datum) 'unquote))
          (handle-comma-command (cdr datum)))
+        ;; Silently ignore export forms (no module context)
+        ((and (pair? datum) (eq? (car datum) 'export))
+         (void))
+        ;; Resolve Gerbil-style imports
+        ((and (pair? datum) (eq? (car datum) 'import))
+         (guard (exn (#t (display-error "import error" exn)))
+           (eval-import-form datum)))
         (else
          (eval-and-print datum)))))
 
@@ -196,8 +218,14 @@
            (stripped (map strip-annotations forms)))
       (for-each
         (lambda (form)
-          (let ((compiled (gerbil-compile-top form)))
-            (chez:eval compiled repl-env)))
+          (cond
+            ((and (pair? form) (eq? (car form) 'export))
+             (void))  ;; skip exports in script mode
+            ((and (pair? form) (eq? (car form) 'import))
+             (eval-import-form form))
+            (else
+             (let ((compiled (gerbil-compile-top form)))
+               (chez:eval compiled repl-env)))))
         stripped)))
 
   ) ;; end library

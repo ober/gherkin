@@ -11,6 +11,8 @@
     gerbil-compile-to-library
     collect-defined-names
     strip-annotations
+    resolve-import
+    *default-import-map*
     )
 
   (import
