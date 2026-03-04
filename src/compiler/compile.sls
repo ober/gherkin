@@ -1665,66 +1665,122 @@
                   (cons resolved result)
                   (cons resolved seen))))))))
 
+  ;; Strip relative path prefixes (./ and ../) and normalize to a base module name.
+  ;; Converts path separators to hyphens for flat R6RS library names.
+  ;; Examples:
+  ;;   "./server"           → "server"
+  ;;   "../server"          → "server"
+  ;;   "./compat/compat"    → "compat"      (use last path component)
+  ;;   "../util/log"        → "util-log"    (join path with hyphens)
+  ;;   "../handlers/sync"   → "handlers-sync"
+  (define (normalize-relative-path s)
+    (let* ((stripped (cond
+                       ((string-prefix-ci? "./" s)
+                        (substring s 2 (string-length s)))
+                       ((string-prefix-ci? "../" s)
+                        (substring s 3 (string-length s)))
+                       (else s))))
+      ;; Replace / with - for flat library naming
+      (let loop ((i 0) (result '()))
+        (if (>= i (string-length stripped))
+          (list->string (reverse result))
+          (let ((c (string-ref stripped i)))
+            (loop (+ i 1)
+                  (cons (if (char=? c #\/) #\- c) result)))))))
+
+  ;; Get the default package name from the import map.
+  ;; Looks for a (*default-package* . pkg-symbol) entry.
+  ;; Falls back to 'gsh for backward compatibility.
+  (define (get-default-package import-map)
+    (let ((entry (assq '*default-package* import-map)))
+      (if entry (cdr entry) 'gsh)))
+
   (define (resolve-import imp import-map)
-    (cond
-      ;; String import: "./module" or "./pregexp-compat"
-      ((string? imp)
-       (let ((name (if (string-prefix-ci? "./" imp)
-                     (substring imp 2 (string-length imp))
-                     imp)))
-         ;; Look up in import-map first
-         (let ((mapped (assq-string (string-append "./" name) import-map)))
+    (let ((default-pkg (get-default-package import-map)))
+      (cond
+        ;; String import: "./module" or "../compat/compat"
+        ((string? imp)
+         (let ((mapped (assq-string imp import-map)))
            (if mapped
              (cdr mapped)
-             ;; Default: assume it's a project-local module in (gsh ...)
-             (let ((lib-name (string->symbol name)))
-               `(gsh ,lib-name))))))
-      ;; Symbol import: :std/sugar, :gsh/ast, ./pregexp-compat, etc.
-      ((symbol? imp)
-       (let* ((s (symbol->string imp))
-              (mapped (or (assq imp import-map)
-                          ;; Also check string key form for ./ imports
-                          (assq-string s import-map))))
-         (cond
-           (mapped (cdr mapped))
-           ;; ./<name> relative import → (gsh <name>)
-           ((string-prefix-ci? "./" s)
-            (let ((name (substring s 2 (string-length s))))
-              `(gsh ,(string->symbol name))))
-           ;; :gsh/<name> → (gsh <name>)
-           ((string-prefix-ci? ":gsh/" s)
-            `(gsh ,(string->symbol (substring s 5 (string-length s)))))
-           ;; :std/<...> → check map, otherwise skip
-           ((string-prefix-ci? ":std/" s)
-            ;; Check for partial prefix matches (e.g. :gerbil/runtime/*)
-            (let ((prefix-match (find-prefix-match s import-map)))
-              (if prefix-match
-                (cdr prefix-match)
-                #f)))  ;; unmapped std import → skip
-           ;; :gerbil/* → strip
-           ((string-prefix-ci? ":gerbil/" s)
-            #f)
-           (else
-            ;; Unknown → try as-is
-            `(,imp)))))
-      ;; Pair import: already a library spec, or (only-in ...) etc.
-      ((pair? imp)
-       ;; Check for (only-in mod sym...) etc.
-       (if (memq (car imp) '(only-in except-in rename-in prefix-in
-                               only except rename prefix))
-         ;; Resolve the module part; convert Gerbil names to R6RS
-         (let ((resolved-mod (resolve-import (cadr imp) import-map))
-               (r6rs-head (case (car imp)
-                            ((only-in only) 'only)
-                            ((except-in except) 'except)
-                            ((rename-in rename) 'rename)
-                            ((prefix-in prefix) 'prefix)
-                            (else (car imp)))))
-           (if resolved-mod
-             `(,r6rs-head ,resolved-mod ,@(cddr imp))
-             #f))
-         imp))
-      (else #f)))
+             ;; Try with ./ prefix normalization
+             (let* ((name (normalize-relative-path imp))
+                    (mapped2 (assq-string (string-append "./" name) import-map)))
+               (if mapped2
+                 (cdr mapped2)
+                 ;; Default: project-local module
+                 `(,default-pkg ,(string->symbol name)))))))
+        ;; Symbol import: :std/sugar, :pkg/ast, ./foo, ../bar/baz, etc.
+        ((symbol? imp)
+         (let* ((s (symbol->string imp))
+                (mapped (or (assq imp import-map)
+                            ;; Also check string key form
+                            (assq-string s import-map))))
+           (cond
+             (mapped (cdr mapped))
+             ;; ./ or ../ relative import → normalize and use default package
+             ((or (string-prefix-ci? "./" s)
+                  (string-prefix-ci? "../" s))
+              (let ((name (normalize-relative-path s)))
+                `(,default-pkg ,(string->symbol name))))
+             ;; :pkg/<name> → check if pkg matches default-package or known packages
+             ;; Generic :prefix/name pattern → (prefix name)
+             ((and (> (string-length s) 1)
+                   (char=? (string-ref s 0) #\:))
+              (let ((slash-idx (let lp ((i 1))
+                                 (cond
+                                   ((>= i (string-length s)) #f)
+                                   ((char=? (string-ref s i) #\/) i)
+                                   (else (lp (+ i 1)))))))
+                (cond
+                  ((not slash-idx)
+                   ;; No slash — just a symbol, try prefix match
+                   (let ((prefix-match (find-prefix-match s import-map)))
+                     (if prefix-match (cdr prefix-match) #f)))
+                  (else
+                   (let* ((pkg-name (substring s 1 slash-idx))
+                          (mod-path (substring s (+ slash-idx 1) (string-length s)))
+                          (mod-sym (string->symbol
+                                     (let loop ((i 0) (result '()))
+                                       (if (>= i (string-length mod-path))
+                                         (list->string (reverse result))
+                                         (let ((c (string-ref mod-path i)))
+                                           (loop (+ i 1)
+                                                 (cons (if (char=? c #\/) #\- c)
+                                                       result))))))))
+                     (cond
+                       ;; :std/* → check map, otherwise skip
+                       ((string=? pkg-name "std")
+                        (let ((prefix-match (find-prefix-match s import-map)))
+                          (if prefix-match (cdr prefix-match) #f)))
+                       ;; :gerbil/* → strip
+                       ((string=? pkg-name "gerbil") #f)
+                       ;; :other-pkg/name → (other-pkg name)
+                       (else
+                        `(,(string->symbol pkg-name) ,mod-sym))))))))
+             ;; :gerbil/* → strip (fallback)
+             ((string-prefix-ci? ":gerbil/" s) #f)
+             (else
+              ;; Unknown → try as-is
+              `(,imp)))))
+        ;; Pair import: already a library spec, or (only-in ...) etc.
+        ((pair? imp)
+         ;; Check for (only-in mod sym...) etc.
+         (if (memq (car imp) '(only-in except-in rename-in prefix-in
+                                 only except rename prefix))
+           ;; Resolve the module part; convert Gerbil names to R6RS
+           (let ((resolved-mod (resolve-import (cadr imp) import-map))
+                 (r6rs-head (case (car imp)
+                              ((only-in only) 'only)
+                              ((except-in except) 'except)
+                              ((rename-in rename) 'rename)
+                              ((prefix-in prefix) 'prefix)
+                              (else (car imp)))))
+             (if resolved-mod
+               `(,r6rs-head ,resolved-mod ,@(cddr imp))
+               #f))
+           imp))
+        (else #f))))
 
   ;; Helper: string prefix check (case-insensitive)
   (define (string-prefix-ci? prefix str)
