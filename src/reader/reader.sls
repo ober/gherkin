@@ -245,8 +245,8 @@
                   (let ((ch3 (reader-next! rs)))
                     (unless (and (char? ch3) (char=? ch3 close-char))
                       (error 'gerbil-read "expected closing delimiter after dot")))
-                  ;; Build improper list
-                  (let build ((items (reverse acc)) (result tail))
+                  ;; Build improper list from acc (already reversed)
+                  (let build ((items acc) (result tail))
                     (if (null? items) result
                         (build (cdr items) (cons (car items) result))))))
                (else
