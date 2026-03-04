@@ -2179,6 +2179,7 @@
       ;; Compile a Gerbil file to a Chez library
       (let ((forms (read-all-forms input-path))
             (imports '())
+            (for-syntax-imports '())
             (exports '())
             (body '()))
         ;; Separate imports, exports, and body
@@ -2186,7 +2187,15 @@
           (lambda (form)
             (cond
               ((and (pair? form) (eq? (car form) 'import))
-               (set! imports (append imports (cdr form))))
+               ;; Scan import specs for (for-syntax ...) wrappers
+               (for-each
+                 (lambda (spec)
+                   (if (and (pair? spec) (eq? (car spec) 'for-syntax))
+                     ;; (for-syntax :std/stxutil) → collect the inner module specs
+                     (set! for-syntax-imports
+                       (append for-syntax-imports (cdr spec)))
+                     (set! imports (append imports (list spec)))))
+                 (cdr form)))
               ((and (pair? form) (eq? (car form) 'export))
                (set! exports (append exports (cdr form))))
               ((and (pair? form) (memq (car form) '(prelude: package: namespace:)))
@@ -2199,13 +2208,38 @@
                ;; R6RS requires definitions before expressions in library bodies.
                ;; Reorder: all define/define-syntax/begin-with-defines first,
                ;; then all expressions (method-set!, etc.)
-               (compiled-body (reorder-library-body compiled-body)))
+               (compiled-body (reorder-library-body compiled-body))
+               ;; Check if any defsyntax forms are present in the original body
+               (has-defsyntax?
+                 (exists (lambda (form)
+                           (and (pair? form) (eq? (car form) 'defsyntax)))
+                         (reverse body)))
+               ;; Resolve for-syntax imports to R6RS (for lib expand)
+               (effective-map (append import-map *default-import-map*))
+               (phase1-imports
+                 (let lp ((specs for-syntax-imports) (result '()))
+                   (if (null? specs)
+                     (reverse result)
+                     (let ((resolved (resolve-import (car specs) effective-map source-dir)))
+                       (if resolved
+                         (lp (cdr specs) (cons `(for ,resolved expand) result))
+                         (lp (cdr specs) result))))))
+               ;; Auto-inject (for (runtime syntax) expand) when defsyntax is present
+               (phase1-imports
+                 (if (and has-defsyntax?
+                          (not (exists (lambda (imp)
+                                         (and (pair? imp)
+                                              (equal? (cadr imp) '(runtime syntax))))
+                                       phase1-imports)))
+                   (cons '(for (runtime syntax) expand) phase1-imports)
+                   phase1-imports)))
           ;; Generate library
           `(library ,lib-name
              (export ,@(compile-exports exports compiled-body))
              (import ,@base-imports
                      ,@(compile-library-imports imports import-map base-imports
-                                                source-dir))
+                                                source-dir)
+                     ,@phase1-imports)
              ,@compiled-body)))))
 
   ;; --- R6RS body reordering ---
@@ -2334,6 +2368,7 @@
       (:std/crypto/digest . (compat std-crypto-digest))
       (:std/net/httpd    . (compat std-net-httpd))
       (:std/db/dbi       . (compat std-db-dbi))
+      (:std/stxutil      . (compat std-stxutil))
       (:std/iter        . #f)  ;; stripped — Gherkin compiles for-loops natively
       (:std/error       . (runtime error))
       (:std/os/signal   . (compat signal))
