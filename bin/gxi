@@ -1,0 +1,10 @@
+#!/bin/sh
+# gxi -- Gherkin REPL launcher
+# Starts the Gerbil-on-Chez interactive REPL
+
+# Resolve project root from script location
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+exec scheme --libdirs "$ROOT:$ROOT/src" --compile-imported-libraries \
+     --program "$ROOT/src/repl/gxi.ss" "$@"

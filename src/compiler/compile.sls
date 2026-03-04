@@ -10,6 +10,7 @@
     gerbil-compile-file
     gerbil-compile-to-library
     collect-defined-names
+    strip-annotations
     )
 
   (import
