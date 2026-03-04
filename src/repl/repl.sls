@@ -62,6 +62,40 @@
          (runtime mop)
          (runtime hash)
          (runtime syntax))
+      repl-env)
+    ;; Install stubs for common Gambit ## primitives so scripts that
+    ;; use them don't crash.  These are no-ops or sensible defaults.
+    (chez:eval
+      '(begin
+         (define (|##set-parallelism-level!| n) (void))
+         (define (|##startup-parallelism!|) (void))
+         (define (|##current-vm-processor-count|) 1)
+         (define (|##process-statistics|)
+           ;; Return f64vector matching Gambit layout:
+           ;; 0=user-time 1=sys-time 2=real-time 3=gc-user 4=gc-real 5=gc-count
+           (let ((secs (/ (cpu-time) 1000.0))
+                 (real (/ (real-time) 1000.0)))
+             (let ((v (make-f64vector 6 0.0)))
+               (f64vector-set! v 0 secs)
+               (f64vector-set! v 2 real)
+               v)))
+         ;; SRFI-18 threading stubs (Gambit built-ins not available on Chez)
+         (define (thread-sleep! seconds)
+           (sleep (make-time 'time-duration
+                   (mod (inexact->exact (round (* seconds 1000000000))) 1000000000)
+                   (inexact->exact (floor seconds)))))
+         (define (make-thread thunk . name)
+           ;; Return the thunk; thread-start! will actually fork it
+           thunk)
+         (define (thread-start! thunk)
+           (fork-thread thunk))
+         (define thread-join! thread-join)
+         ;; Gambit I/O compat
+         (define force-output flush-output-port)
+         ;; Gambit f64vector compat (Chez uses flvector)
+         (define make-f64vector make-flvector)
+         (define f64vector-ref flvector-ref)
+         (define f64vector-set! flvector-set!))
       repl-env))
 
   (define (gxi-start args)
@@ -224,8 +258,10 @@
             ((and (pair? form) (eq? (car form) 'import))
              (eval-import-form form))
             (else
-             (let ((compiled (gerbil-compile-top form)))
-               (chez:eval compiled repl-env)))))
+             (guard (exn
+                      (#t (display-error "warning" exn)))
+               (let ((compiled (gerbil-compile-top form)))
+                 (chez:eval compiled repl-env))))))
         stripped)))
 
   ) ;; end library
