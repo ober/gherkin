@@ -2239,6 +2239,8 @@
       (:std/misc/completion . (compat std-sync-completion))
       (:std/sync/channel . (compat std-sync-channel))
       (:std/misc/channel . (compat std-sync-channel))
+      (:std/xml         . (compat std-xml))
+      (:std/markup/xml  . (compat std-xml))
       (:std/iter        . #f)  ;; stripped — Gherkin compiles for-loops natively
       (:std/error       . (runtime error))
       (:std/os/signal   . (compat signal))

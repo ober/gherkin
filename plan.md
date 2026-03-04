@@ -263,7 +263,7 @@ Gerbil `equal?` on transparent structs compares fields recursively. Chez needs c
 10. **`:std/test` compat** — enables running tests for all projects ✅ DONE
 11. **`:std/text/json` in default map** — already exists in gherkin-lsp ✅ DONE
 12. **`:std/misc/ports` compat** — `read-all-as-string`, `copy-port`, etc. ✅ DONE
-13. **`:std/xml` compat** — enables gerbil-svg
+13. **`:std/xml` compat** — enables gerbil-svg ✅ DONE
 14. **`with-lock`** — enables gerbil-persist patterns ✅ DONE
 
 ### Tier 3 — Completeness
