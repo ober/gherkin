@@ -221,8 +221,10 @@
   (define (read-list rs close-char)
     (let loop ((acc '()))
       (skip-whitespace! rs)
-      ;; Handle # comments inside lists
-      (handle-hash-comments! rs)
+      ;; Handle # comments inside lists; may return a datum for non-comment # tokens
+      (let ((hash-datum (handle-hash-comments! rs)))
+        (if hash-datum
+          (loop (cons hash-datum acc))
       (let ((ch (reader-peek rs)))
         (cond
           ((eof-object? ch)
@@ -257,39 +259,37 @@
            (let ((datum (read-datum rs)))
              (if (eof-object? datum)
                  (error 'gerbil-read "unterminated list")
-                 (loop (cons datum acc)))))))))
+                 (loop (cons datum acc)))))))))))
 
   ;; Handle #| and #; comments that appear inside lists
+  ;; Handle #| and #; comments inside lists.
+  ;; Returns #f if no hash was consumed, or a datum if a non-comment hash
+  ;; expression was read (e.g. #t, #f, #\x, #(...), #u8(...)).
   (define (handle-hash-comments! rs)
     (let ((ch (reader-peek rs)))
-      (when (and (char? ch) (char=? ch #\#))
-        (reader-next! rs)
-        (let ((ch2 (reader-peek rs)))
-          (cond
-            ((and (char? ch2) (char=? ch2 #\|))
-             (reader-next! rs)
-             (skip-block-comment! rs 1)
-             (skip-whitespace! rs)
-             (handle-hash-comments! rs))
-            ((and (char? ch2) (char=? ch2 #\;))
-             (reader-next! rs)
-             (skip-whitespace! rs)
-             (read-datum rs) ;; discard
-             (skip-whitespace! rs)
-             (handle-hash-comments! rs))
-            (else
-             ;; Not a comment - we consumed #, process as hash token
-             ;; Push back ch2 (it's already peeked, not consumed)
-             ;; We need to handle this: reader-next! already consumed #
-             ;; The caller's next reader-peek will see ch2
-             ;; But we've already consumed # from the stream...
-             ;; Solution: directly read the hash dispatch and add result to list
-             ;; We'll use a different approach: return a value to indicate
-             ;; "we read a hash token, here's the datum"
-             ;; Actually, let's just push back by setting peeked
-             ;; But we can't push back #. Let me use a flag approach.
-             ;; Simplest: read the hash datum right here and return it via mutation
-             (void)))))))
+      (if (and (char? ch) (char=? ch #\#))
+        (let ((loc (reader-location rs)))
+          (reader-next! rs)  ;; consume #
+          (let ((ch2 (reader-peek rs)))
+            (cond
+              ;; #| block comment
+              ((and (char? ch2) (char=? ch2 #\|))
+               (reader-next! rs)
+               (skip-block-comment! rs 1)
+               (skip-whitespace! rs)
+               (handle-hash-comments! rs))
+              ;; #; datum comment
+              ((and (char? ch2) (char=? ch2 #\;))
+               (reader-next! rs)
+               (skip-whitespace! rs)
+               (read-datum rs) ;; discard
+               (skip-whitespace! rs)
+               (handle-hash-comments! rs))
+              ;; Not a comment — # was consumed, so call read-hash
+              ;; to process #\, #t, #f, #(, #u8(, #!, etc.
+              (else
+               (read-hash rs loc)))))
+        #f)))
 
   ;;;; Hash dispatch (#)
 
@@ -391,8 +391,48 @@
                  (annotate rs (list 'unsyntax-splicing (read-datum rs)) loc))
                (annotate rs (list 'unsyntax (read-datum rs)) loc))))
 
+        ;; #x hex, #o octal, #b binary, #d decimal number
+        ((or (char=? ch #\x) (char=? ch #\X))
+         (reader-next! rs)
+         (let ((str (read-number-chars rs)))
+           (annotate rs (string->number (string-append "#x" str)) loc)))
+
+        ((or (char=? ch #\o) (char=? ch #\O))
+         (reader-next! rs)
+         (let ((str (read-number-chars rs)))
+           (annotate rs (string->number (string-append "#o" str)) loc)))
+
+        ((or (char=? ch #\b) (char=? ch #\B))
+         (reader-next! rs)
+         (let ((str (read-number-chars rs)))
+           (annotate rs (string->number (string-append "#b" str)) loc)))
+
+        ((or (char=? ch #\d) (char=? ch #\D))
+         (reader-next! rs)
+         (let ((str (read-number-chars rs)))
+           (annotate rs (string->number (string-append "#d" str)) loc)))
+
+        ;; ## double-hash (Gambit primitives)
+        ((char=? ch #\#)
+         (reader-next! rs)
+         (let ((name (read-symbol-chars rs #f)))
+           (let ((sym (string->symbol (string-append "##" (symbol->string name)))))
+             (annotate rs sym loc))))
+
         (else
          (error 'gerbil-read "invalid # dispatch" ch)))))
+
+  ;; Read chars that could be part of a number literal
+  (define (read-number-chars rs)
+    (let loop ((acc '()))
+      (let ((ch (reader-peek rs)))
+        (if (and (char? ch)
+                 (or (char-numeric? ch)
+                     (and (char>=? ch #\a) (char<=? ch #\f))
+                     (and (char>=? ch #\A) (char<=? ch #\F))
+                     (char=? ch #\+) (char=? ch #\-)))
+          (begin (reader-next! rs) (loop (cons ch acc)))
+          (list->string (reverse acc))))))
 
   ;;;; Hash-bang reader
 

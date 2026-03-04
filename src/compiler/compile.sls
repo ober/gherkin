@@ -9,6 +9,7 @@
     gerbil-compile-expression
     gerbil-compile-file
     gerbil-compile-to-library
+    collect-defined-names
     )
 
   (import
@@ -17,17 +18,20 @@
             1+ 1- fx/ fx1+ fx1-
             error error? raise with-exception-handler identifier?
             hash-table? make-hash-table)
-    (rename (only (chezscheme) error raise)
-            (error chez:error) (raise chez:raise))
-    (only (compat gambit-compat) |##keyword?| |##keyword->string|)
+    (rename (only (chezscheme) error raise void)
+            (error chez:error) (raise chez:raise) (void chez:void))
+    (only (compat gambit-compat) |##keyword?| |##keyword->string|
+          void? absent-obj? unbound-obj?)
     (compat types)
-    (runtime util)
+    (except (runtime util) void?)
     (except (runtime table) string-hash)
     (runtime mop)
     (runtime error)
     (runtime hash)
     (runtime syntax)
-    (runtime eval))
+    (runtime eval)
+    (only (reader reader)
+          gerbil-read-file annotated-datum? annotated-datum-value))
 
   ;; --- Top-level form compilation ---
   ;; Takes a Gerbil s-expression and returns a Chez s-expression
@@ -81,6 +85,10 @@
     ;; Also handles => type annotations:
     ;;   (def (name args...) => type body...)
     ;;   (def name : type expr)
+    ;; Also handles optional args:
+    ;;   (def (name req (opt default)) body...) → case-lambda
+    ;; Also handles keyword args:
+    ;;   (def (name req kw: (kw default)) body...) → case-lambda
     (let ((sig (cadr form))
           (body (cddr form)))
       (cond
@@ -93,14 +101,18 @@
                                     (eq? (car body) '=>))
                               (cddr body)  ;; skip => and type
                               body)))
-             `(define (,name ,@(compile-params params))
-                ,@(map gerbil-compile-expression real-body)))))
+             (if (has-optional-params? params)
+               (compile-def-with-optionals name params real-body)
+               `(define (,name ,@(compile-params params))
+                  ,@(map gerbil-compile-expression real-body))))))
         ;; (def name : type expr) — type-annotated value
         ((and (pair? body) (eq? (car body) ':) (pair? (cdr body)) (pair? (cddr body)))
          `(define ,sig ,(gerbil-compile-expression (caddr body))))
         ;; (def name expr)
         (else
-         `(define ,sig ,(gerbil-compile-expression (car body)))))))
+         (if (null? body)
+           `(define ,sig (void))
+           `(define ,sig ,(gerbil-compile-expression (car body))))))))
 
   ;; --- def* (case-lambda define) ---
   (define (compile-def* form)
@@ -116,23 +128,99 @@
                   clauses)))))
 
   ;; --- Parameter compilation ---
-  ;; Handles Gerbil parameter syntax: rest args, optional args
+  ;; Handles Gerbil parameter syntax: rest args, optional args, keyword args
   (define (compile-params params)
     (cond
       ((null? params) '())
       ((symbol? params) params)  ;; rest arg
       ((pair? params)
-       (cons (car params) (compile-params (cdr params))))
+       (let ((p (car params)))
+         (cond
+           ;; keyword arg: name: (name default) → skip (handled at def level)
+           ((keyword-symbol? p)
+            ;; Skip keyword and its spec, continue with rest
+            (if (and (pair? (cdr params)) (pair? (cadr params)))
+              (compile-params (cddr params))
+              (compile-params (cdr params))))
+           ;; optional arg: (name default) → just the name
+           ((and (pair? p) (symbol? (car p)))
+            (cons (car p) (compile-params (cdr params))))
+           (else
+            (cons p (compile-params (cdr params)))))))
       (else params)))
+
+  ;; Check if param list has optional args: (name default) pairs
+  (define (has-optional-params? params)
+    (cond
+      ((null? params) #f)
+      ((not (pair? params)) #f)
+      ((pair? (car params)) #t)
+      ((keyword-symbol? (car params)) #t)
+      (else (has-optional-params? (cdr params)))))
+
+  ;; Extract required params (before first optional)
+  (define (required-params params)
+    (cond
+      ((null? params) '())
+      ((not (pair? params)) '())  ;; rest arg - not a required positional
+      ((pair? (car params)) '())  ;; optional arg starts
+      ((keyword-symbol? (car params)) '()) ;; keyword starts
+      (else (cons (car params) (required-params (cdr params))))))
+
+  ;; Extract optional params: list of (name default) pairs
+  (define (optional-params params)
+    (cond
+      ((null? params) '())
+      ((not (pair? params)) '())
+      ((keyword-symbol? (car params))
+       ;; keyword: (name default) → treat as optional
+       (if (and (pair? (cdr params)) (pair? (cadr params)))
+         (cons (cadr params) (optional-params (cddr params)))
+         (optional-params (cdr params))))
+      ((pair? (car params))
+       (cons (car params) (optional-params (cdr params))))
+      (else (optional-params (cdr params)))))
+
+  ;; Extract rest param if any
+  (define (rest-param params)
+    (cond
+      ((null? params) #f)
+      ((symbol? params) params)
+      ((pair? params)
+       (if (null? (cdr params))
+         #f
+         (rest-param (cdr params))))
+      (else #f)))
 
   ;; --- Expression compilation ---
   (define (gerbil-compile-expression expr)
     (cond
       ((not (pair? expr))
        (cond
+         ;; Gerbil keyword object → quoted keyword string
+         ((|##keyword?| expr)
+          `(quote ,(string->symbol (string-append (|##keyword->string| expr) ":"))))
          ((and (symbol? expr) (keyword-symbol? expr))
           ;; Convert keyword: symbol to quoted keyword
           `(quote ,expr))
+         ;; self.field dot notation → (slot-ref self 'field)
+         ((and (symbol? expr) (dot-notation? expr))
+          (compile-dot-ref expr))
+         ;; #!void → (void)
+         ((void? expr)
+          '(void))
+         ;; #!eof → (eof-object)
+         ((eof-object? expr)
+          '(eof-object))
+         ;; #!optional (absent) → (absent-obj)
+         ((absent-obj? expr)
+          '(absent-obj))
+         ;; #!unbound → (unbound-obj)
+         ((unbound-obj? expr)
+          '(unbound-obj))
+         ;; ## Gambit primitives → FFI replacements
+         ((and (symbol? expr) (gambit-primitive-replacement expr))
+          => (lambda (x) x))
          (else expr)))
       (else
        (let ((head (car expr)))
@@ -178,12 +266,12 @@
             `(begin ,@(map gerbil-compile-expression (cdr expr))))
            ;; set!
            ((eq? head 'set!)
-            `(set! ,(cadr expr) ,(gerbil-compile-expression (caddr expr))))
+            (compile-set! expr))
            ;; quote
            ((eq? head 'quote) expr)
            ;; quasiquote
            ((eq? head 'quasiquote)
-            `(quasiquote ,(compile-quasiquote (cadr expr))))
+            (list 'quasiquote (compile-quasiquote (cadr expr))))
            ;; match
            ((eq? head 'match)
             (compile-match expr))
@@ -257,10 +345,22 @@
             `(with-exception-handler
                ,(gerbil-compile-expression (cadr expr))
                ,(gerbil-compile-expression (caddr expr))))
-           ;; with-catch (Gerbil-style)
+           ;; with-catch (Gerbil-style): (with-catch handler (lambda () body ...))
+           ;; → (guard (__exn (#t (handler __exn))) body ...)
+           ;; Must unwrap the thunk since guard evaluates body directly
            ((eq? head 'with-catch)
-            `(guard (__exn (#t (,(gerbil-compile-expression (cadr expr)) __exn)))
-               ,(gerbil-compile-expression (caddr expr))))
+            (let ((handler (gerbil-compile-expression (cadr expr)))
+                  (body-form (caddr expr)))
+              ;; If body is (lambda () expr ...), unwrap the thunk
+              (let ((body-exprs
+                      (if (and (pair? body-form)
+                               (memq (car body-form) '(lambda #%lambda))
+                               (null? (cadr body-form)))  ;; no args = thunk
+                        (map gerbil-compile-expression (cddr body-form))
+                        ;; Not a lambda — call the compiled thunk
+                        (list `(,(gerbil-compile-expression body-form))))))
+                `(guard (__exn (#t (,handler __exn)))
+                   ,@body-exprs))))
            ;; with-unwind-protect
            ((eq? head 'with-unwind-protect)
             (compile-unwind-protect expr))
@@ -282,6 +382,20 @@
            ((eq? head 'assume)
             ;; (assume type expr) → just compile expr (strip type annotation)
             (gerbil-compile-expression (caddr expr)))
+           ;; gensym: convert symbol arg to string (Gambit accepts symbols, Chez requires strings)
+           ((eq? head 'gensym)
+            (if (null? (cdr expr))
+              '(gensym)
+              (let ((arg (cadr expr)))
+                (cond
+                  ;; (gensym 'sym) → (gensym "sym")
+                  ((and (pair? arg) (eq? (car arg) 'quote) (symbol? (cadr arg)))
+                   `(gensym ,(symbol->string (cadr arg))))
+                  ;; (gensym "str") → pass through
+                  ((string? arg) `(gensym ,arg))
+                  ;; anything else → compile and convert at runtime
+                  (else `(gensym (let ((x ,(gerbil-compile-expression arg)))
+                                   (if (symbol? x) (symbol->string x) x))))))))
            ;; void
            ((eq? head 'void)
             '(void))
@@ -297,6 +411,9 @@
            ;; @method -- reader-generated form for {...}
            ((eq? head '@method)
             (compile-at-method expr))
+           ;; hash literal: (hash (key val) ...)
+           ((eq? head 'hash)
+            (compile-hash-literal expr))
            ;; displayln / println
            ((eq? head 'displayln)
             (compile-displayln expr))
@@ -546,34 +663,57 @@
                                     parents))
              (parent-refs (if (null? parent-type-refs) `(list object::t)
                             `(list ,@parent-type-refs))))
-        `(begin
-           (define ,(string->symbol (string-append (symbol->string name) "::t"))
-             (make-class-type ',type-id ',type-name ,parent-refs
-               ',(if (list? fields) fields (list fields))
-               '()
-               #f))
-           ;; Predicate
-           (define (,(string->symbol (string-append (symbol->string name) "?")) obj)
-             (|##structure-instance-of?| obj ',type-id))
-           ;; Accessors and mutators for each field
-           ,@(let lp ((fs (if (list? fields) fields (list fields))) (acc '()))
-               (if (null? fs)
-                 (reverse acc)
-                 (lp (cdr fs)
-                     (append
-                       (list
-                         `(define (,(string->symbol
-                                     (string-append (symbol->string name) "-"
-                                                    (symbol->string (car fs))))
-                                  obj)
-                            (slot-ref obj ',(car fs)))
-                         `(define (,(string->symbol
-                                     (string-append (symbol->string name) "-"
-                                                    (symbol->string (car fs))
-                                                    "-set!"))
-                                  obj val)
-                            (slot-set! obj ',(car fs) val)))
-                       acc))))))))
+        (let ((type-sym (string->symbol (string-append (symbol->string name) "::t")))
+              (make-sym (string->symbol (string-append "make-" (symbol->string name)))))
+          `(begin
+             (define ,type-sym
+               (make-class-type ',type-id ',type-name ,parent-refs
+                 ',(if (list? fields) fields (list fields))
+                 '()
+                 #f))
+             ;; Bare class name alias (for method-set!, etc.)
+             (define ,name ,type-sym)
+             ;; Predicate
+             (define (,(string->symbol (string-append (symbol->string name) "?")) obj)
+               (|##structure-instance-of?| obj ',type-id))
+             ;; Constructor: (make-<name> keyword-args...) → creates instance, calls :init!
+             (define (,make-sym . args)
+               (let ((obj (make-class-instance ,type-sym))
+                     (init-fn (method-ref ,type-sym ':init!)))
+                 (when init-fn
+                   ;; Strip keyword symbols from args: 'parent: val 'name: val → val val
+                   (let ((positional (let lp ((rest args) (acc '()))
+                                      (cond
+                                        ((null? rest) (reverse acc))
+                                        ((and (pair? (cdr rest))
+                                              (symbol? (car rest))
+                                              (let ((s (symbol->string (car rest))))
+                                                (and (> (string-length s) 0)
+                                                     (char=? (string-ref s (- (string-length s) 1)) #\:))))
+                                         ;; keyword: value pair → take value, skip keyword
+                                         (lp (cddr rest) (cons (cadr rest) acc)))
+                                        (else (lp (cdr rest) (cons (car rest) acc)))))))
+                     (apply init-fn obj positional)))
+                 obj))
+             ;; Accessors and mutators for each field
+             ,@(let lp ((fs (if (list? fields) fields (list fields))) (acc '()))
+                 (if (null? fs)
+                   (reverse acc)
+                   (lp (cdr fs)
+                       (append
+                         (list
+                           `(define (,(string->symbol
+                                       (string-append (symbol->string name) "-"
+                                                      (symbol->string (car fs))))
+                                    obj)
+                              (slot-ref obj ',(car fs)))
+                           `(define (,(string->symbol
+                                       (string-append (symbol->string name) "-"
+                                                      (symbol->string (car fs))
+                                                      "-set!"))
+                                    obj val)
+                              (slot-set! obj ',(car fs) val)))
+                         acc)))))))))
 
   ;; --- defmethod compilation ---
   (define (compile-defmethod form)
@@ -595,7 +735,9 @@
   (define (compile-defrules form)
     ;; (defrules name () (pattern template) ...)
     ;; (defrule (name pattern) template)
-    (let ((name (cadr form)))
+    (let ((name (if (eq? (car form) 'defrule)
+                  (caadr form)   ;; defrule: (defrule (NAME . pattern) template)
+                  (cadr form)))) ;; defrules: (defrules NAME (kws) clauses...)
       (if (eq? (car form) 'defrule)
         ;; (defrule (name . pattern) template)
         (let ((pattern (cdr (cadr form)))
@@ -627,6 +769,140 @@
              ,@(map gerbil-compile-expression body)))
         `(define-syntax ,sig ,(gerbil-compile-expression (car body))))))
 
+  ;; --- set! compilation (handles accessor targets and dot notation) ---
+  (define (compile-set! expr)
+    ;; (set! (accessor obj) val) → (accessor-set! obj val)
+    ;; (set! self.field val) → (slot-set! self 'field val)
+    ;; (set! var val) → (set! var val)
+    (let ((target (cadr expr))
+          (val (caddr expr)))
+      (cond
+        ;; (set! (accessor obj) val) → (accessor-set! obj val)
+        ((pair? target)
+         (let* ((accessor (car target))
+                (obj (cadr target))
+                (setter (string->symbol
+                          (string-append (symbol->string accessor) "-set!"))))
+           `(,setter ,(gerbil-compile-expression obj)
+                     ,(gerbil-compile-expression val))))
+        ;; (set! self.field val) → (slot-set! self 'field val)
+        ((and (symbol? target) (dot-notation? target))
+         (let-values (((obj-sym field-sym) (split-dot-notation target)))
+           `(slot-set! ,obj-sym ',field-sym ,(gerbil-compile-expression val))))
+        ;; Normal set!
+        (else
+         `(set! ,target ,(gerbil-compile-expression val))))))
+
+  ;; --- Gambit primitive replacements ---
+  ;; Map ##-prefixed Gambit primitives to Chez equivalents
+  (define *gambit-primitive-map*
+    '((|##os-getpid|  . ffi-getpid)
+      (|##os-getppid| . ffi-getppid)))
+
+  (define (gambit-primitive-replacement sym)
+    (let ((s (symbol->string sym)))
+      (and (>= (string-length s) 2)
+           (char=? (string-ref s 0) #\#)
+           (char=? (string-ref s 1) #\#)
+           (let ((entry (assq sym *gambit-primitive-map*)))
+             (and entry (cdr entry))))))
+
+  ;; --- Dot notation: self.field ---
+  (define (dot-notation? sym)
+    (and (symbol? sym)
+         (let ((s (symbol->string sym)))
+           (and (> (string-length s) 2)
+                (let lp ((i 1))
+                  (cond
+                    ((>= i (- (string-length s) 1)) #f)
+                    ((char=? (string-ref s i) #\.) #t)
+                    (else (lp (+ i 1)))))))))
+
+  (define (split-dot-notation sym)
+    (let* ((s (symbol->string sym))
+           (dot-pos (let lp ((i 0))
+                      (if (char=? (string-ref s i) #\.)
+                        i (lp (+ i 1))))))
+      (values (string->symbol (substring s 0 dot-pos))
+              (string->symbol (substring s (+ dot-pos 1) (string-length s))))))
+
+  (define (compile-dot-ref sym)
+    ;; self.field → (slot-ref self 'field)
+    (let-values (((obj-sym field-sym) (split-dot-notation sym)))
+      `(slot-ref ,obj-sym ',field-sym)))
+
+  ;; --- hash literal compilation ---
+  (define (compile-hash-literal expr)
+    ;; (hash (key val) ...) → (let ((ht (make-hash-table))) (hash-put! ht 'key val)... ht)
+    ;; In Gerbil, hash literal keys are implicitly quoted symbols
+    (let ((pairs (cdr expr))
+          (ht (gensym "ht")))
+      (define (compile-hash-key k)
+        (cond
+          ((symbol? k) `(quote ,k))     ;; symbol keys → quoted
+          ((string? k) k)               ;; string keys stay as-is
+          (else (gerbil-compile-expression k))))
+      `(let ((,ht (make-hash-table)))
+         ,@(map (lambda (pair)
+                  (if (pair? pair)
+                    `(hash-put! ,ht ,(compile-hash-key (car pair))
+                                ,(gerbil-compile-expression (cadr pair)))
+                    `(hash-put! ,ht ,(compile-hash-key pair) #t)))
+                pairs)
+         ,ht)))
+
+  ;; --- def with optional/keyword args → case-lambda ---
+  (define (compile-def-with-optionals name params body)
+    (let ((req (required-params params))
+          (opts (optional-params params))
+          (rest (rest-param params)))
+      ;; Generate case-lambda with clauses for each arity
+      ;; Clause for N required args (all optionals use defaults)
+      ;; Clause for N+1 (first optional supplied) etc.
+      ;; Clause for N+M (all optionals supplied)
+      (let ((compiled-body (map gerbil-compile-expression body)))
+        (if rest
+          ;; Has rest arg — just one clause with let defaults
+          `(define (,name ,@req . __rest-args)
+             (let* (,@(let lp ((opts opts) (i 0) (bindings '()))
+                        (if (null? opts)
+                          (reverse bindings)
+                          (let ((opt-name (caar opts))
+                                (opt-default (cadar opts)))
+                            (lp (cdr opts) (+ i 1)
+                                (cons `(,opt-name
+                                        (if (> (length __rest-args) ,i)
+                                          (list-ref __rest-args ,i)
+                                          ,(gerbil-compile-expression opt-default)))
+                                      bindings))))))
+               ,@compiled-body))
+          ;; No rest arg — generate case-lambda
+          (let ((n-req (length req)))
+            `(define ,name
+               (case-lambda
+                 ,@(let lp ((opts-remaining opts) (clause-idx 0) (clauses '()))
+                     (if (null? opts-remaining)
+                       ;; Final clause: all optionals supplied
+                       (reverse
+                         (cons
+                           `((,@req ,@(map car opts))
+                             ,@compiled-body)
+                           clauses))
+                       ;; Clause where opts-remaining[0..] use defaults
+                       (let* ((supplied-opts (take-n opts clause-idx))
+                              (defaulted-opts opts-remaining)
+                              (clause-params (append req (map car supplied-opts)))
+                              (default-bindings
+                                (map (lambda (o)
+                                       `(,(car o) ,(gerbil-compile-expression (cadr o))))
+                                     defaulted-opts)))
+                         (lp (cdr opts-remaining) (+ clause-idx 1)
+                             (cons
+                               `(,clause-params
+                                 (let* ,default-bindings
+                                   ,@compiled-body))
+                               clauses))))))))))))
+
   ;; --- import compilation ---
   (define (compile-import form)
     ;; (import module1 module2 ...)
@@ -634,7 +910,7 @@
     ;; For now, pass through
     form)
 
-  ;; --- lambda compilation (handle => annotation) ---
+  ;; --- lambda compilation (handle => annotation, optional args) ---
   (define (compile-lambda expr)
     ;; (lambda params body...) or (lambda params => type body...)
     (let ((params (cadr expr))
@@ -643,8 +919,60 @@
       (let ((body (if (and (pair? rest) (pair? (cdr rest)) (eq? (car rest) '=>))
                     (cddr rest)  ;; skip => and type
                     rest)))
-        `(lambda ,(compile-params params)
-           ,@(map gerbil-compile-expression body)))))
+        (if (and (pair? params) (has-optional-params? params))
+          ;; Lambda with optional/keyword args → case-lambda
+          (compile-lambda-with-optionals params body)
+          `(lambda ,(compile-params params)
+             ,@(map gerbil-compile-expression body))))))
+
+  (define (compile-lambda-with-optionals params body)
+    (let ((req (required-params params))
+          (opts (optional-params params))
+          (rest (rest-param params)))
+      (let ((compiled-body (map gerbil-compile-expression body)))
+        (if rest
+          ;; Has rest arg — single clause with let defaults
+          `(lambda (,@req . __rest-args)
+             (let* (,@(let lp ((opts opts) (i 0) (bindings '()))
+                        (if (null? opts)
+                          (reverse bindings)
+                          (let ((opt-name (caar opts))
+                                (opt-default (cadar opts)))
+                            (lp (cdr opts) (+ i 1)
+                                (cons `(,opt-name
+                                        (if (> (length __rest-args) ,i)
+                                          (list-ref __rest-args ,i)
+                                          ,(gerbil-compile-expression opt-default)))
+                                      bindings))))))
+               ,@compiled-body))
+          ;; No rest arg — case-lambda
+          `(case-lambda
+             ,@(let lp ((opts-remaining opts) (clause-idx 0) (clauses '()))
+                 (if (null? opts-remaining)
+                   (reverse
+                     (cons
+                       `((,@req ,@(map car opts))
+                         ,@compiled-body)
+                       clauses))
+                   (let* ((supplied-opts (take-n opts clause-idx))
+                          (defaulted-opts opts-remaining)
+                          (clause-params (append req (map car supplied-opts)))
+                          (default-bindings
+                            (map (lambda (o)
+                                   `(,(car o) ,(gerbil-compile-expression (cadr o))))
+                                 defaulted-opts)))
+                     (lp (cdr opts-remaining) (+ clause-idx 1)
+                         (cons
+                           `(,clause-params
+                             (let* ,default-bindings
+                               ,@compiled-body))
+                           clauses))))))))))
+
+  ;; --- take-n utility ---
+  (define (take-n lst n)
+    (if (or (= n 0) (null? lst))
+      '()
+      (cons (car lst) (take-n (cdr lst) (- n 1)))))
 
   ;; --- try/catch/finally compilation ---
   (define (compile-try form)
@@ -774,6 +1102,7 @@
     ;; (for (bindings...) body...) → iterate over sequences
     ;; Forms:
     ;;   (for (var seq-expr) body...)           — single binding
+    ;;   (for ([k . v] seq-expr) body...)       — destructuring binding
     ;;   (for ((var1 seq1) (var2 seq2)) body...)  — parallel bindings
     (let ((bindings (cadr expr))
           (body (cddr expr)))
@@ -781,6 +1110,16 @@
         ;; (for (var seq) body...) — single var, single seq
         ((and (pair? bindings) (= (length bindings) 2) (symbol? (car bindings)))
          (compile-for-single-binding (car bindings) (cadr bindings) body))
+        ;; (for ([k . v] seq) body...) — destructuring pair binding
+        ;; The car of bindings is a dotted pair (not a proper list of bindings)
+        ((and (pair? bindings) (= (length bindings) 2)
+              (pair? (car bindings)) (not (list? (car bindings))))
+         (compile-for-destructure-binding (car bindings) (cadr bindings) body))
+        ;; (for ([k v] seq) body...) — destructuring list binding
+        ((and (pair? bindings) (= (length bindings) 2)
+              (pair? (car bindings)) (list? (car bindings))
+              (for-all symbol? (car bindings)))
+         (compile-for-destructure-list-binding (car bindings) (cadr bindings) body))
         ;; (for ((var1 seq1) ...) body...) — list of bindings
         ((and (pair? bindings) (pair? (car bindings)))
          (compile-for-parallel-bindings bindings body))
@@ -793,6 +1132,36 @@
     (let ((compiled-seq (compile-for-sequence seq)))
       `(for-each (lambda (,var) ,@(map gerbil-compile-expression body))
                  ,compiled-seq)))
+
+  (define (compile-for-destructure-binding pattern seq body)
+    ;; Handle dotted pair patterns in for-loops
+    ;; Reader produces (@list k . v) for [k . v]
+    ;; Or plain (k . v) for other cases
+    (let ((compiled-seq (compile-for-sequence seq))
+          (tmp (gensym "pair")))
+      (let-values (((key-var val-var)
+                    (if (and (pair? pattern) (eq? (car pattern) '@list))
+                      ;; (@list k . v) → k is cadr, v is cddr
+                      (values (cadr pattern) (cddr pattern))
+                      ;; (k . v)
+                      (values (car pattern) (cdr pattern)))))
+        `(for-each (lambda (,tmp)
+                     (let ((,key-var (car ,tmp))
+                           (,val-var (cdr ,tmp)))
+                       ,@(map gerbil-compile-expression body)))
+                   ,compiled-seq))))
+
+  (define (compile-for-destructure-list-binding pattern seq body)
+    ;; (for ([a b] seq) body) → (for-each (lambda (tmp) (let ((a (car tmp)) (b (cadr tmp))) body)) seq)
+    (let ((compiled-seq (compile-for-sequence seq))
+          (tmp (gensym "elem")))
+      (let ((binds (let lp ((vars pattern) (idx 0) (acc '()))
+                     (if (null? vars)
+                       (reverse acc)
+                       (lp (cdr vars) (+ idx 1)
+                           (cons `(,(car vars) (list-ref ,tmp ,idx)) acc))))))
+        `(for-each (lambda (,tmp) (let ,binds ,@(map gerbil-compile-expression body)))
+                   ,compiled-seq))))
 
   (define (compile-for-parallel-bindings bindings body)
     ;; Each binding is (var seq-expr)
@@ -1076,12 +1445,20 @@
       ((pair? props) (extract-prop key (cdr props) default))
       (else default)))
 
-  ;; --- Helper: check if symbol ends with colon (keyword) ---
+  ;; --- Helper: check if value is a keyword (symbol ending with : or Gerbil keyword object) ---
   (define (keyword-symbol? sym)
-    (and (symbol? sym)
-         (let ((s (symbol->string sym)))
-           (and (fx> (string-length s) 1)
-                (char=? (string-ref s (fx- (string-length s) 1)) #\:)))))
+    (or (|##keyword?| sym)
+        (and (symbol? sym)
+             (let ((s (symbol->string sym)))
+               (and (fx> (string-length s) 1)
+                    (char=? (string-ref s (fx- (string-length s) 1)) #\:))))))
+
+  ;; Extract the keyword name string from a keyword symbol or keyword object
+  (define (keyword-name kw)
+    (if (|##keyword?| kw)
+      (|##keyword->string| kw)
+      (let ((s (symbol->string kw)))
+        (substring s 0 (fx- (string-length s) 1)))))
 
   ;; --- File compilation ---
   (define (gerbil-compile-file input-path)
@@ -1090,65 +1467,288 @@
       (map gerbil-compile-top forms)))
 
   (define (read-all-forms path)
-    (call-with-input-file path
-      (lambda (port)
-        (let lp ((forms '()))
-          (let ((datum (read port)))
-            (if (eof-object? datum)
-              (reverse forms)
-              (lp (cons datum forms))))))))
+    ;; Use the Gerbil reader to handle ## symbols, [] brackets, {} braces, etc.
+    ;; Then strip source annotations to get plain s-expressions.
+    (map strip-annotations (gerbil-read-file path)))
+
+  ;; Strip annotated-datum wrappers from reader output, recursively
+  (define (strip-annotations datum)
+    (cond
+      ((annotated-datum? datum)
+       (strip-annotations (annotated-datum-value datum)))
+      ((pair? datum)
+       (cons (strip-annotations (car datum))
+             (strip-annotations (cdr datum))))
+      ((vector? datum)
+       (vector-map strip-annotations datum))
+      (else datum)))
 
   ;; --- Library compilation ---
-  (define (gerbil-compile-to-library input-path lib-name)
-    ;; Compile a Gerbil file to a Chez library
-    (let ((forms (read-all-forms input-path))
-          (imports '())
-          (exports '())
-          (body '()))
-      ;; Separate imports, exports, and body
-      (for-each
-        (lambda (form)
-          (cond
-            ((and (pair? form) (eq? (car form) 'import))
-             (set! imports (append imports (cdr form))))
-            ((and (pair? form) (eq? (car form) 'export))
-             (set! exports (append exports (cdr form))))
-            ((and (pair? form) (memq (car form) '(prelude: package: namespace:)))
-             #f)  ;; skip Gerbil headers
-            (else
-             (set! body (cons form body)))))
-        forms)
-      ;; Generate library
-      `(library ,lib-name
-         (export ,@(compile-exports (reverse exports)))
-         (import (chezscheme)
-                 (compat types)
-                 (runtime util)
-                 (runtime mop)
-                 ,@(compile-library-imports imports))
-         ,@(map gerbil-compile-top (reverse body)))))
+  ;; import-map: optional alist mapping Gerbil module paths to Chez library names
+  ;; e.g. ((:std/sugar . (compat sugar)) (:std/iter . #f) ...)
+  ;; #f means strip (don't import)
+  ;; base-imports: optional list of Chez import specs to include by default
+  (define (gerbil-compile-to-library input-path lib-name . rest)
+    (let ((import-map (if (pair? rest) (car rest) '()))
+          (base-imports (if (and (pair? rest) (pair? (cdr rest)))
+                         (cadr rest)
+                         '((chezscheme)))))
+      ;; Compile a Gerbil file to a Chez library
+      (let ((forms (read-all-forms input-path))
+            (imports '())
+            (exports '())
+            (body '()))
+        ;; Separate imports, exports, and body
+        (for-each
+          (lambda (form)
+            (cond
+              ((and (pair? form) (eq? (car form) 'import))
+               (set! imports (append imports (cdr form))))
+              ((and (pair? form) (eq? (car form) 'export))
+               (set! exports (append exports (cdr form))))
+              ((and (pair? form) (memq (car form) '(prelude: package: namespace:)))
+               #f)  ;; skip Gerbil headers
+              (else
+               (set! body (cons form body)))))
+          forms)
+        ;; Compile the body
+        (let* ((compiled-body (map gerbil-compile-top (reverse body)))
+               ;; R6RS requires definitions before expressions in library bodies.
+               ;; Reorder: all define/define-syntax/begin-with-defines first,
+               ;; then all expressions (method-set!, etc.)
+               (compiled-body (reorder-library-body compiled-body)))
+          ;; Generate library
+          `(library ,lib-name
+             (export ,@(compile-exports exports compiled-body))
+             (import ,@base-imports
+                     ,@(compile-library-imports imports import-map base-imports))
+             ,@compiled-body)))))
 
-  (define (compile-exports exports)
+  ;; --- R6RS body reordering ---
+  ;; Partition body into definitions and expressions, with definitions first.
+  (define (reorder-library-body forms)
+    (let lp ((forms forms) (defs '()) (exprs '()))
+      (if (null? forms)
+        (append (reverse defs) (reverse exprs))
+        (let ((form (car forms)))
+          (if (definition-form? form)
+            (lp (cdr forms) (cons form defs) exprs)
+            (lp (cdr forms) defs (cons form exprs)))))))
+
+  (define (definition-form? form)
+    (and (pair? form)
+         (or (eq? (car form) 'define)
+             (eq? (car form) 'define-syntax)
+             (eq? (car form) 'define-record-type)
+             ;; (begin ...) containing only definitions
+             (and (eq? (car form) 'begin)
+                  (not (null? (cdr form)))
+                  (for-all definition-form? (cdr form))))))
+
+  ;; --- (export #t) resolution ---
+  ;; When exports contain #t, collect all defined names from the compiled body
+  (define (compile-exports exports compiled-body)
     (cond
       ((null? exports) '())
-      ((and (pair? exports) (eq? (car exports) '#t))
-       ;; (export #t) - export all
-       '())  ;; Can't determine, skip
-      (else exports)))
+      ((memq #t exports)
+       ;; (export #t) - export all defined names
+       (collect-defined-names compiled-body))
+      (else
+       ;; Filter and expand exports:
+       ;; - (struct-out name) → expand to all struct-generated names from body
+       ;; - regular symbols pass through
+       (let ((all-names (collect-defined-names compiled-body)))
+         (let lp ((exps exports) (result '()))
+           (cond
+             ((null? exps) (reverse result))
+             ((and (pair? (car exps)) (eq? (caar exps) 'struct-out))
+              ;; (struct-out name) → find all generated names for that struct
+              (let* ((struct-name (cadar exps))
+                     (prefix (symbol->string struct-name))
+                     (struct-names
+                       (filter (lambda (n)
+                                 (let ((s (symbol->string n)))
+                                   (or (string=? s (string-append "make-" prefix))
+                                       (string=? s (string-append prefix "?"))
+                                       (string-prefix? (string-append prefix "-") s)
+                                       (string=? s (string-append prefix "::t")))))
+                               all-names)))
+                (lp (cdr exps) (append (reverse struct-names) result))))
+             ((symbol? (car exps))
+              (lp (cdr exps) (cons (car exps) result)))
+             (else
+              ;; Skip unrecognized export forms
+              (lp (cdr exps) result))))))))
 
-  (define (compile-library-imports imports)
+  (define (string-prefix? prefix str)
+    (let ((plen (string-length prefix)))
+      (and (<= plen (string-length str))
+           (string=? prefix (substring str 0 plen)))))
+
+  ;; Collect all top-level defined names from compiled body forms
+  (define (collect-defined-names forms)
+    (let lp ((forms forms) (names '()))
+      (if (null? forms)
+        (reverse names)
+        (let ((form (car forms)))
+          (lp (cdr forms)
+              (append (extract-names-from-form form) names))))))
+
+  (define (extract-names-from-form form)
+    (cond
+      ((not (pair? form)) '())
+      ((eq? (car form) 'define)
+       (let ((sig (cadr form)))
+         (list (if (pair? sig) (car sig) sig))))
+      ((eq? (car form) 'define-syntax)
+       (let ((name-or-sig (cadr form)))
+         (list (if (pair? name-or-sig) (car name-or-sig) name-or-sig))))
+      ((eq? (car form) 'begin)
+       ;; Recurse into begin blocks (defstruct/defclass expand to begin)
+       (let lp ((rest (cdr form)) (names '()))
+         (if (null? rest) names
+           (lp (cdr rest) (append (extract-names-from-form (car rest)) names)))))
+      (else '())))
+
+  ;; --- Import path mapping ---
+  ;; Default import map for gerbil-shell modules
+  (define *default-import-map*
+    '((:std/sugar       . (compat sugar))
+      (:std/format      . (compat format))
+      (:std/sort        . (compat sort))
+      (:std/pregexp     . (compat pregexp))
+      (:std/misc/string . (compat misc))
+      (:std/misc/list   . (compat misc))
+      (:std/misc/path   . (compat misc))
+      (:std/misc/hash   . (compat misc))
+      (:std/iter        . #f)  ;; stripped — Gherkin compiles for-loops natively
+      (:std/error       . (runtime error))
+      (:std/os/signal   . (compat signal))
+      (:std/os/signal-handler . (compat signal-handler))
+      (:std/os/fdio     . (compat fdio))
+      (:std/srfi/1      . (compat misc))
+      (:std/foreign     . #f)  ;; stripped
+      (:gerbil/runtime  . #f)  ;; stripped
+      ))
+
+  ;; Extract the bare library name from an import spec, stripping
+  ;; except/only/rename wrappers. E.g.:
+  ;;   (except (runtime error) with-catch) → (runtime error)
+  ;;   (only (compat gambit) foo) → (compat gambit)
+  ;;   (runtime mop) → (runtime mop)
+  (define (import-spec-library-name spec)
+    (cond
+      ((and (pair? spec)
+            (memq (car spec) '(except only rename prefix)))
+       (import-spec-library-name (cadr spec)))
+      (else spec)))
+
+  (define (compile-library-imports imports import-map . rest)
     ;; Convert Gerbil import specs to Chez library imports
-    (filter-map1
-      (lambda (imp)
-        (cond
-          ((string? imp)
-           ;; Relative path import: "./module" → (module)
-           #f)  ;; skip for now
-          ((symbol? imp)
-           ;; Named import
-           `(,imp))
-          ((pair? imp) imp)
-          (else #f)))
-      imports))
+    ;; Uses import-map (merged with defaults) to resolve paths
+    ;; Optional rest arg: base-imports to deduplicate against
+    (let* ((effective-map (append import-map *default-import-map*))
+           ;; Extract library names already covered by base imports
+           (base-libs (if (pair? rest)
+                        (map import-spec-library-name (car rest))
+                        '())))
+      (let lp ((imports imports) (result '()) (seen '()))
+        (if (null? imports)
+          (reverse result)
+          (let ((resolved (resolve-import (car imports) effective-map)))
+            (if (or (not resolved)
+                    (member resolved seen)
+                    ;; Skip if this library is already in base imports
+                    (member resolved base-libs))
+              (lp (cdr imports) result seen)
+              (lp (cdr imports)
+                  (cons resolved result)
+                  (cons resolved seen))))))))
+
+  (define (resolve-import imp import-map)
+    (cond
+      ;; String import: "./module" or "./pregexp-compat"
+      ((string? imp)
+       (let ((name (if (string-prefix-ci? "./" imp)
+                     (substring imp 2 (string-length imp))
+                     imp)))
+         ;; Look up in import-map first
+         (let ((mapped (assq-string (string-append "./" name) import-map)))
+           (if mapped
+             (cdr mapped)
+             ;; Default: assume it's a project-local module in (gsh ...)
+             (let ((lib-name (string->symbol name)))
+               `(gsh ,lib-name))))))
+      ;; Symbol import: :std/sugar, :gsh/ast, ./pregexp-compat, etc.
+      ((symbol? imp)
+       (let* ((s (symbol->string imp))
+              (mapped (or (assq imp import-map)
+                          ;; Also check string key form for ./ imports
+                          (assq-string s import-map))))
+         (cond
+           (mapped (cdr mapped))
+           ;; ./<name> relative import → (gsh <name>)
+           ((string-prefix-ci? "./" s)
+            (let ((name (substring s 2 (string-length s))))
+              `(gsh ,(string->symbol name))))
+           ;; :gsh/<name> → (gsh <name>)
+           ((string-prefix-ci? ":gsh/" s)
+            `(gsh ,(string->symbol (substring s 5 (string-length s)))))
+           ;; :std/<...> → check map, otherwise skip
+           ((string-prefix-ci? ":std/" s)
+            ;; Check for partial prefix matches (e.g. :gerbil/runtime/*)
+            (let ((prefix-match (find-prefix-match s import-map)))
+              (if prefix-match
+                (cdr prefix-match)
+                #f)))  ;; unmapped std import → skip
+           ;; :gerbil/* → strip
+           ((string-prefix-ci? ":gerbil/" s)
+            #f)
+           (else
+            ;; Unknown → try as-is
+            `(,imp)))))
+      ;; Pair import: already a library spec, or (only-in ...) etc.
+      ((pair? imp)
+       ;; Check for (only-in mod sym...) etc.
+       (if (memq (car imp) '(only-in except-in rename-in prefix-in
+                               only except rename prefix))
+         ;; Resolve the module part; convert Gerbil names to R6RS
+         (let ((resolved-mod (resolve-import (cadr imp) import-map))
+               (r6rs-head (case (car imp)
+                            ((only-in only) 'only)
+                            ((except-in except) 'except)
+                            ((rename-in rename) 'rename)
+                            ((prefix-in prefix) 'prefix)
+                            (else (car imp)))))
+           (if resolved-mod
+             `(,r6rs-head ,resolved-mod ,@(cddr imp))
+             #f))
+         imp))
+      (else #f)))
+
+  ;; Helper: string prefix check (case-insensitive)
+  (define (string-prefix-ci? prefix str)
+    (let ((plen (string-length prefix))
+          (slen (string-length str)))
+      (and (<= plen slen)
+           (string=? prefix (substring str 0 plen)))))
+
+  ;; Helper: find an import-map entry matching a prefix
+  (define (find-prefix-match str import-map)
+    (cond
+      ((null? import-map) #f)
+      ((let ((key (caar import-map)))
+         (and (symbol? key)
+              (string-prefix-ci? (symbol->string key) str)))
+       (car import-map))
+      (else (find-prefix-match str (cdr import-map)))))
+
+  ;; Helper: assq for string keys
+  (define (assq-string key alist)
+    (cond
+      ((null? alist) #f)
+      ((and (string? (caar alist)) (string=? (caar alist) key))
+       (car alist))
+      (else (assq-string key (cdr alist)))))
 
   ) ;; end library

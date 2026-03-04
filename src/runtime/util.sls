@@ -45,7 +45,8 @@
     ;; SMP locks (using Chez atomics)
     make-spinlock spinlock-acquire! spinlock-release!
     ;; misc
-    iota last-pair append-reverse
+    iota last-pair last append-reverse
+    identity
     )
 
   (import
@@ -316,10 +317,15 @@
       (last-pair (cdr lst))
       lst))
 
+  (define (last lst)
+    (car (last-pair lst)))
+
   (define (append-reverse rhead tail)
     (if (pair? rhead)
       (append-reverse (cdr rhead) (cons (car rhead) tail))
       tail))
+
+  (define (identity x) x)
 
   ;; --- arithmetic ---
   (define (1+ x) (+ x 1))

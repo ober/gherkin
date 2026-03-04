@@ -20,6 +20,10 @@
     display-exception
     ;; stack trace
     dump-stack-trace?
+    ;; Gerbil class-style aliases (Error?, Error-message, etc.)
+    Error? Error-message Error-irritants
+    ;; Gambit error-exception compat
+    error-exception? error-exception-message os-exception?
     )
 
   (import
@@ -173,5 +177,28 @@
 
   ;; --- Stack trace ---
   (define dump-stack-trace? (make-parameter #f))
+
+  ;; --- Gerbil class-style aliases ---
+  ;; Gerbil's defclass Error generates Error?, Error-message, Error-irritants
+  (define Error? error?)
+  (define Error-message error-message)
+  (define Error-irritants error-irritants)
+
+  ;; --- Gambit error-exception compat ---
+  ;; Gambit's error-exception? maps to Chez serious conditions
+  (define (error-exception? e)
+    (or (chez:error? e)
+        (condition? e)))
+
+  (define (error-exception-message e)
+    (if (message-condition? e)
+        (condition-message e)
+        (format "~a" e)))
+
+  ;; Gambit's os-exception? maps to Chez i/o conditions
+  (define (os-exception? e)
+    (or (i/o-error? e)
+        (and (condition? e)
+             (message-condition? e))))
 
   ) ;; end library
