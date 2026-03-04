@@ -532,7 +532,12 @@
             ;; (_ body...) - wildcard
             ((eq? pattern '_)
              `(begin ,@(map gerbil-compile-expression body)))
-            ;; ([hd . rest] body...) - pair destructuring
+            ;; #(pats...) - vector pattern
+            ((vector? pattern)
+             (compile-match-pattern target pattern
+               `(begin ,@(map gerbil-compile-expression body))
+               (compile-match-clauses target rest)))
+            ;; ([hd . rest] body...) - pair destructuring / struct / quoted etc.
             ((pair? pattern)
              (compile-match-pattern target pattern
                `(begin ,@(map gerbil-compile-expression body))
@@ -548,13 +553,64 @@
     (cond
       ;; wildcard
       ((eq? pattern '_) success)
-      ;; (? pred) - predicate
+
+      ;; (? pred) — bare predicate test
+      ;; (? pred var) — predicate test + bind var
+      ;; (? pred => pat) — predicate test, bind result to pat
       ((and (pair? pattern) (eq? (car pattern) '?))
-       (let ((pred (cadr pattern)))
-         (if (and (pair? pred) (eq? (car pred) 'not))
-           `(if (not (,(cadr pred) ,target)) ,success ,fail)
-           `(if (,pred ,target) ,success ,fail))))
-      ;; (hd . rest) - pair destructuring
+       (compile-match-predicate target pattern success fail))
+
+      ;; (and pat1 pat2 ...) — all patterns must match
+      ((and (pair? pattern) (eq? (car pattern) 'and))
+       (compile-match-and target (cdr pattern) success fail))
+
+      ;; (or pat1 pat2 ...) — first matching pattern wins
+      ((and (pair? pattern) (eq? (car pattern) 'or))
+       (compile-match-or target (cdr pattern) success fail))
+
+      ;; (not pat) — pattern must NOT match
+      ((and (pair? pattern) (eq? (car pattern) 'not))
+       (compile-match-pattern target (cadr pattern) fail success))
+
+      ;; (apply func pat) — apply func, match result against pat
+      ((and (pair? pattern) (eq? (car pattern) 'apply))
+       (let ((func (cadr pattern))
+             (pat (caddr pattern))
+             (tmp (gensym "apply-val")))
+         `(let ((,tmp (,(gerbil-compile-expression func) ,target)))
+            ,(compile-match-pattern tmp pat success fail))))
+
+      ;; (quote datum) — quoted literal comparison
+      ((and (pair? pattern) (eq? (car pattern) 'quote))
+       (let ((datum (cadr pattern)))
+         (cond
+           ((or (symbol? datum) (boolean? datum) (char? datum) (null? datum))
+            `(if (eq? ,target ',datum) ,success ,fail))
+           ((number? datum)
+            `(if (eqv? ,target ',datum) ,success ,fail))
+           (else
+            `(if (equal? ,target ',datum) ,success ,fail)))))
+
+      ;; #(pat ...) — vector pattern
+      ((vector? pattern)
+       (compile-match-vector target (vector->list pattern) success fail))
+
+      ;; (@list pat ...) — list pattern from reader
+      ((and (pair? pattern) (eq? (car pattern) '@list))
+       (compile-match-list-pattern target (cdr pattern) success fail))
+
+      ;; (StructName pat ...) — struct pattern if name ends with known type conventions
+      ;; We detect struct patterns by checking if the head symbol has a companion
+      ;; predicate (Name?) in scope. Since we can't check scope at compile time,
+      ;; we use a heuristic: if the head is a capitalized symbol, treat as struct pattern.
+      ((and (pair? pattern)
+            (symbol? (car pattern))
+            (let ((s (symbol->string (car pattern))))
+              (and (> (string-length s) 0)
+                   (char-upper-case? (string-ref s 0)))))
+       (compile-match-struct target (car pattern) (cdr pattern) success fail))
+
+      ;; (hd . rest) — pair/cons destructuring
       ((pair? pattern)
        (let ((hd-pattern (car pattern))
              (rest-pattern (cdr pattern)))
@@ -567,15 +623,134 @@
                    (compile-match-pattern tl-tmp rest-pattern success fail)
                    fail))
               ,fail))))
+
       ;; [] - null
       ((null? pattern)
        `(if (null? ,target) ,success ,fail))
-      ;; symbol - bind it
+
+      ;; symbol — bind it
       ((symbol? pattern)
        `(let ((,pattern ,target)) ,success))
-      ;; literal
+
+      ;; literal (number, string, char, boolean)
       (else
        `(if (equal? ,target ',pattern) ,success ,fail))))
+
+  ;; --- Match: predicate patterns ---
+  (define (compile-match-predicate target pattern success fail)
+    ;; (? pred) — bare predicate
+    ;; (? pred var) — predicate + bind
+    ;; (? (lambda (v) ...) var) — lambda predicate + bind
+    ;; (? (not pred)) — negated predicate
+    (let ((pred-expr (cadr pattern))
+          (rest (cddr pattern)))
+      (cond
+        ;; (? (not pred)) — negated
+        ((and (pair? pred-expr) (eq? (car pred-expr) 'not))
+         `(if (not (,(gerbil-compile-expression (cadr pred-expr)) ,target))
+            ,success ,fail))
+        ;; (? pred var) — test and bind
+        ((and (pair? rest) (symbol? (car rest)))
+         `(if (,(gerbil-compile-expression pred-expr) ,target)
+            (let ((,(car rest) ,target)) ,success)
+            ,fail))
+        ;; (? pred pat) — test and match sub-pattern
+        ((pair? rest)
+         `(if (,(gerbil-compile-expression pred-expr) ,target)
+            ,(compile-match-pattern target (car rest) success fail)
+            ,fail))
+        ;; (? pred) — bare test
+        (else
+         `(if (,(gerbil-compile-expression pred-expr) ,target)
+            ,success ,fail)))))
+
+  ;; --- Match: and patterns ---
+  (define (compile-match-and target patterns success fail)
+    ;; All patterns must match
+    (if (null? patterns)
+      success
+      (compile-match-pattern target (car patterns)
+        (compile-match-and target (cdr patterns) success fail)
+        fail)))
+
+  ;; --- Match: or patterns ---
+  (define (compile-match-or target patterns success fail)
+    ;; First matching pattern wins
+    (if (null? patterns)
+      fail
+      (compile-match-pattern target (car patterns)
+        success
+        (compile-match-or target (cdr patterns) success fail))))
+
+  ;; --- Match: vector patterns ---
+  (define (compile-match-vector target pats success fail)
+    ;; Match against vector elements
+    (let ((n (length pats)))
+      `(if (and (vector? ,target) (= (vector-length ,target) ,n))
+         ,(compile-match-vector-elems target pats 0 success fail)
+         ,fail)))
+
+  (define (compile-match-vector-elems target pats idx success fail)
+    (if (null? pats)
+      success
+      (let ((tmp (gensym "vec-elem")))
+        `(let ((,tmp (vector-ref ,target ,idx)))
+           ,(compile-match-pattern tmp (car pats)
+              (compile-match-vector-elems target (cdr pats) (+ idx 1) success fail)
+              fail)))))
+
+  ;; --- Match: list pattern from @list ---
+  (define (compile-match-list-pattern target pats success fail)
+    ;; (@list a b c) from [a b c] → match against list elements
+    ;; Handle dotted pairs too: (@list a b . rest)
+    (cond
+      ((null? pats)
+       `(if (null? ,target) ,success ,fail))
+      ((and (not (pair? pats)) (symbol? pats))
+       ;; Rest binding: (... . rest)
+       `(let ((,pats ,target)) ,success))
+      ((pair? pats)
+       (let ((hd-tmp (gensym "hd"))
+             (tl-tmp (gensym "tl")))
+         `(if (pair? ,target)
+            (let ((,hd-tmp (car ,target))
+                  (,tl-tmp (cdr ,target)))
+              ,(compile-match-pattern hd-tmp (car pats)
+                 (compile-match-list-pattern tl-tmp (cdr pats) success fail)
+                 fail))
+            ,fail)))
+      (else fail)))
+
+  ;; --- Match: struct patterns ---
+  (define (compile-match-struct target struct-name field-pats success fail)
+    ;; (StructName pat1 pat2 ...) → check predicate, extract fields
+    ;; Generates: (if (StructName? target)
+    ;;              (let ((tmp1 (StructName-field1 target)) ...)
+    ;;                (match-pattern tmp1 pat1 ... success fail))
+    ;;              fail)
+    (let* ((pred-name (string->symbol
+                        (string-append (symbol->string struct-name) "?")))
+           (type-sym (string->symbol
+                       (string-append (symbol->string struct-name) "::t"))))
+      ;; Use slot-ref for field access (works with inherited fields)
+      ;; We need to get field names from the type at runtime
+      `(if (,pred-name ,target)
+         ,(compile-match-struct-fields target type-sym field-pats 1 success fail)
+         ,fail)))
+
+  (define (compile-match-struct-fields target type-sym field-pats idx success fail)
+    ;; Extract struct fields positionally using |##structure-ref|
+    (if (null? field-pats)
+      success
+      (let ((pat (car field-pats))
+            (tmp (gensym "field")))
+        (if (eq? pat '_)
+          ;; Wildcard — skip this field
+          (compile-match-struct-fields target type-sym (cdr field-pats) (+ idx 1) success fail)
+          `(let ((,tmp (|##structure-ref| ,target ,idx)))
+             ,(compile-match-pattern tmp pat
+                (compile-match-struct-fields target type-sym (cdr field-pats) (+ idx 1) success fail)
+                fail))))))
 
   ;; --- cut compilation ---
   (define (compile-cut form)
@@ -747,7 +922,7 @@
 
   ;; --- defmethod compilation ---
   (define (compile-defmethod form)
-    ;; (defmethod {name type} body) or (defmethod (name obj args...) body...)
+    ;; (defmethod {name type} body) or (defmethod (name (self type) args...) body...)
     (let ((sig (cadr form))
           (body (cddr form)))
       (cond
@@ -757,8 +932,26 @@
                (type (caddr sig)))
            `(method-set! ,type ',name ,(gerbil-compile-expression (car body)))))
         ;; (defmethod (name (self type) args...) body...)
+        ;; → (method-set! type::t 'name (lambda (self args...) body...))
+        ((and (pair? sig) (symbol? (car sig)) (pair? (cdr sig))
+              (pair? (cadr sig)))
+         (let* ((method-name (car sig))
+                (typed-param (cadr sig))
+                (self-name (car typed-param))
+                (type-name (cadr typed-param))
+                (other-args (cddr sig))
+                (type-sym (string->symbol
+                            (string-append (symbol->string type-name) "::t")))
+                ;; Strip => type annotation from body if present
+                (real-body (if (and (pair? body) (pair? (cdr body))
+                                   (eq? (car body) '=>))
+                             (cddr body)
+                             body)))
+           `(method-set! ,type-sym ',method-name
+              (lambda (,self-name ,@other-args)
+                ,@(map gerbil-compile-expression real-body)))))
+        ;; Fallback: just compile body
         (else
-         ;; For now, pass through
          `(begin ,@(map gerbil-compile-expression body))))))
 
   ;; --- defrules compilation ---

@@ -251,10 +251,10 @@ Gerbil `equal?` on transparent structs compares fields recursively. Chez needs c
 1. **`let-hash`** — 470 uses, trivial to compile (hash-ref expansion) ✅ DONE
 2. **`let/cc`** — 60 uses, trivial (`call/cc` wrapper) ✅ DONE
 3. **`defvalues`** — 56 uses, trivial (`define-values`) ✅ DONE
-4. **`match` struct patterns** — used in every project with defstruct
-5. **`match` nested patterns + guards** — used extensively
+4. **`match` struct patterns** — used in every project with defstruct ✅ DONE
+5. **`match` nested patterns + guards** — used extensively ✅ DONE
 6. **`spawn`/`spawn/name`** — 195 uses, map to gherkin threading ✅ DONE
-7. **`defmethod` full form** — needed for any OOP code
+7. **`defmethod` full form** — needed for any OOP code ✅ DONE
 8. **`awhen`/`aif`/`and-let*`** — sugar macros, easy to add ✅ DONE
 
 ### Tier 2 — Enables Specific Project Categories
