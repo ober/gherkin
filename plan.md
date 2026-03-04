@@ -268,11 +268,11 @@ Gerbil `equal?` on transparent structs compares fields recursively. Chez needs c
 
 ### Tier 3 — Completeness
 
-15. **`:std/text/base64`/`:std/text/hex`** — encoding utilities
+15. **`:std/text/base64`/`:std/text/hex`** — encoding utilities ✅ DONE
 16. **`:std/sync/completion`/`:std/sync/channel`** — concurrency primitives
 17. **`:std/net/request`** — HTTP client (complex, may need Chez FFI)
 18. **`:std/crypto/digest`** — crypto (needs native library)
-19. **`include` support** — file inlining
+19. **`include` support** — file inlining ✅ DONE
 20. **`export #t`** — re-export all
 21. **Import filters** (`only-in`, `except-in`, `rename-in`)
 
@@ -297,7 +297,7 @@ These could be added to `compile.sls` with minimal effort:
 | `with-lock` | dynamic-wind + mutex | ~10 | ✅ DONE |
 | `awhen`/`aif` | let + when/if expansion | ~10 each | ✅ DONE |
 | `and-let*` | nested let + and | ~15 | ✅ DONE |
-| `include` | read-file + splice | ~15 | |
+| `include` | read-file + splice | ~15 | ✅ DONE |
 
 The **biggest effort items** are `interface` compilation (~200 lines) and completing `match` patterns (~150 lines for struct/nested/guard support). These two unlock the most projects.
 

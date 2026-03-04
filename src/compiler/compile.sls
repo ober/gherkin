@@ -75,6 +75,9 @@
            ;; defvalues
            ((eq? head 'defvalues)
             (compile-defvalues form))
+           ;; include
+           ((eq? head 'include)
+            (compile-include form))
            ;; declare
            ((eq? head 'declare)
             '(begin)) ;; ignore declarations
@@ -1180,6 +1183,17 @@
                                    ,@compiled-body))
                                clauses))))))))))))
 
+  ;; --- include compilation ---
+  (define (compile-include form)
+    ;; (include "file.ss") → read and compile the file's forms inline
+    (let ((path (cadr form)))
+      (if (string? path)
+        (guard (exn
+                 [#t `(begin)]) ;; silently skip if file not found
+          (let ((forms (read-all-forms path)))
+            `(begin ,@(map gerbil-compile-top forms))))
+        `(begin))))
+
   ;; --- defvalues compilation ---
   (define (compile-defvalues form)
     ;; (defvalues (a b c) expr) → (define-values (a b c) expr)
@@ -2219,6 +2233,8 @@
       (:std/misc/ports  . (compat std-misc-ports))
       (:std/test        . (compat std-test))
       (:std/text/json   . (compat json))
+      (:std/text/base64 . (compat std-text-base64))
+      (:std/text/hex    . (compat std-text-hex))
       (:std/iter        . #f)  ;; stripped — Gherkin compiles for-loops natively
       (:std/error       . (runtime error))
       (:std/os/signal   . (compat signal))
