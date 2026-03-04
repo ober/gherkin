@@ -279,8 +279,8 @@ Gerbil `equal?` on transparent structs compares fields recursively. Chez needs c
 ### Tier 4 — Advanced (Future)
 
 22. **Macro expansion phase** — for projects using `defsyntax`
-23. **`:std/db/dbi`** — database abstraction
-24. **`:std/net/httpd`** — HTTP server
+23. **`:std/db/dbi`** — database abstraction ✅ DONE
+24. **`:std/net/httpd`** — HTTP server ✅ DONE
 
 ---
 

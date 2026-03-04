@@ -2332,6 +2332,8 @@
       (:std/markup/xml  . (compat std-xml))
       (:std/net/request . (compat std-net-request))
       (:std/crypto/digest . (compat std-crypto-digest))
+      (:std/net/httpd    . (compat std-net-httpd))
+      (:std/db/dbi       . (compat std-db-dbi))
       (:std/iter        . #f)  ;; stripped — Gherkin compiles for-loops natively
       (:std/error       . (runtime error))
       (:std/os/signal   . (compat signal))
