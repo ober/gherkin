@@ -43,6 +43,7 @@ Commands:
   pkg <subcmd>             invoke the package manager directly
   compile <file.ss>        compile a Gerbil .ss file (gxc)
   interactive              start the Gherkin REPL (gxi)
+  convert <url> [-o dir]   convert a gerbil-* repo to standalone gherkin project
   help [cmd]               display help for a command
 
 Aliases:
@@ -119,6 +120,53 @@ SCHEME
     # interactive → gxi
     interactive)
         exec "$ROOT/bin/gxi" "$@"
+        ;;
+
+    # convert → convert a gerbil-* repo to standalone gherkin project
+    convert)
+        if [ $# -eq 0 ]; then
+            echo "Usage: gherkin convert <github-url> [-o output-dir]" >&2
+            echo "" >&2
+            echo "Convert a Gerbil project repository into a standalone Gherkin project." >&2
+            echo "" >&2
+            echo "Examples:" >&2
+            echo "  gherkin convert https://github.com/ober/gerbil-shell" >&2
+            echo "  gherkin convert https://github.com/ober/gerbil-lsp -o ~/projects/my-lsp" >&2
+            echo "" >&2
+            echo "This will:" >&2
+            echo "  1. Create a gherkin-<name> directory" >&2
+            echo "  2. Add the repo as a git submodule" >&2
+            echo "  3. Analyze build.ss for modules and exe targets" >&2
+            echo "  4. Generate build infrastructure (Makefile, build scripts, compat layer)" >&2
+            exit 1
+        fi
+        # Parse args: URL and optional -o dir
+        CONVERT_URL="$1"
+        shift
+        CONVERT_DIR=""
+        while [ $# -gt 0 ]; do
+            case "$1" in
+                -o|--output) CONVERT_DIR="$2"; shift 2 ;;
+                *) echo "Unknown option: $1" >&2; exit 1 ;;
+            esac
+        done
+        exec scheme -q --libdirs "$ROOT:$ROOT/src" --compile-imported-libraries \
+            --program /dev/stdin -- "$CONVERT_URL" "$CONVERT_DIR" <<'SCHEME'
+#!chezscheme
+(import (chezscheme) (tools convert))
+(let ((args (cdr (command-line))))
+  ;; Skip "--" separator if present
+  (let ((args (if (and (pair? args) (string=? (car args) "--"))
+                (cdr args) args)))
+    (when (null? args)
+      (display "Error: URL required\n" (current-error-port))
+      (exit 1))
+    (let ((url (car args))
+          (output-dir (and (pair? (cdr args))
+                           (not (string=? (cadr args) ""))
+                           (cadr args))))
+      (gherkin-convert url output-dir))))
+SCHEME
         ;;
 
     *)
