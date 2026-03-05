@@ -353,3 +353,4 @@ For reference, the gherkin compiler already handles these correctly:
 - `:std/net/httpd` — HTTP server (API surface)
 - `:std/crypto/digest` — md5, sha1, sha256 (via openssl)
 - `:std/db/dbi` — SQL database interface (SQLite backend)
+- `:std/disasm` — procedure disassembly (via objdump)

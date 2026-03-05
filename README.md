@@ -55,4 +55,5 @@ tests/
     test-reader.ss      Reader tests
     test-types.ss       Type system tests
     test-threading.ss   Threading tests
+    test-disasm.ss      Disassembly module tests
 ```
