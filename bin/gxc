@@ -1,9 +1,9 @@
 #!/bin/sh
 # gxc -- Gherkin compiler
-# Compiles a Gerbil .ss file to a Chez Scheme executable
+# Compiles a Gerbil .ss file to a standalone ELF binary
 #
 # Usage:
-#   gxc <input.ss>              # compile to input (executable wrapper)
+#   gxc <input.ss>              # compile to ELF binary
 #   gxc <input.ss> -o <output>  # compile to named output
 #   gxc <input.ss> -t           # transpile only (emit .ss, don't compile)
 #   gxc <input.ss> -r           # compile and run immediately
@@ -21,6 +21,7 @@ usage() {
     echo "  -r            Compile and run immediately"
     echo "  -v            Verbose: show generated Chez source"
     echo "  -L <dir>      Add library search path"
+    echo "  -p <prefix>   Set package prefix (auto-detected from gerbil.pkg)"
     echo "  -h            Show this help"
     exit "${1:-0}"
 }
@@ -94,9 +95,42 @@ if [ -z "$PKG_PREFIX" ]; then
     done
 fi
 
+# Find Chez Scheme installation directory (for boot files, headers, and libraries)
+CHEZ_DIR="$(scheme -q --program /dev/stdin <<'FIND_CHEZ'
+#!chezscheme
+(import (chezscheme))
+(define (str-prefix? pfx s)
+  (and (<= (string-length pfx) (string-length s))
+       (string=? pfx (substring s 0 (string-length pfx)))))
+(let* ((mt (symbol->string (machine-type)))
+       (bases (list
+                (format "~a/.local/lib" (getenv "HOME"))
+                "/usr/lib"
+                "/usr/local/lib")))
+  (let loop ((bases bases))
+    (if (null? bases)
+      (begin (display "NOT_FOUND") (exit 1))
+      (let ((dir-list (if (file-exists? (car bases))
+                        (directory-list (car bases))
+                        '())))
+        (let inner ((dirs dir-list))
+          (cond
+            ((null? dirs) (loop (cdr bases)))
+            ((and (str-prefix? "csv" (car dirs))
+                  (file-exists? (format "~a/~a/~a/scheme.h" (car bases) (car dirs) mt)))
+             (display (format "~a/~a/~a" (car bases) (car dirs) mt)))
+            (else (inner (cdr dirs)))))))))
+FIND_CHEZ
+)"
+
+if [ "$CHEZ_DIR" = "NOT_FOUND" ] || [ -z "$CHEZ_DIR" ]; then
+    echo "Error: cannot find Chez Scheme installation (scheme.h, libkernel.a)"
+    exit 1
+fi
+
 exec scheme -q --libdirs ".:src" --compile-imported-libraries --program /dev/stdin \
     "$INPUT_ABS" "$OUTPUT" "${TRANSPILE_ONLY:-0}" "${VERBOSE:-0}" "${RUN_AFTER:-0}" \
-    "$ROOT" "$EXTRA_LIBDIRS" "${PKG_PREFIX:-gsh}" <<'SCHEME_EOF'
+    "$ROOT" "$EXTRA_LIBDIRS" "${PKG_PREFIX:-gsh}" "$CHEZ_DIR" <<'SCHEME_EOF'
 #!chezscheme
 (import
   (except (chezscheme) void box box? unbox set-box!
@@ -107,6 +141,141 @@ exec scheme -q --libdirs ".:src" --compile-imported-libraries --program /dev/std
   (compiler compile)
   (boot gherkin))
 
+;; ========================================
+;; Utility: split colon-separated string
+;; ========================================
+(define (split-colons s)
+  (if (string=? s "")
+    '()
+    (let split ((s s) (acc '()))
+      (let ((pos (let lp ((i 0))
+                   (cond
+                     ((= i (string-length s)) #f)
+                     ((char=? (string-ref s i) #\:) i)
+                     (else (lp (+ i 1)))))))
+        (if pos
+          (let ((part (substring s 0 pos)))
+            (split (substring s (+ pos 1) (string-length s))
+                   (if (string=? part "") acc (cons part acc))))
+          (if (string=? s "") (reverse acc) (reverse (cons s acc))))))))
+
+;; ========================================
+;; Utility: convert binary file to C byte array
+;; ========================================
+(define (file->c-array input-path array-name out)
+  (let* ((data (get-bytevector-all (open-file-input-port input-path)))
+         (size (bytevector-length data)))
+    (put-string out (format "static const unsigned char ~a[] = {\n" array-name))
+    (let loop ((i 0))
+      (when (< i size)
+        (when (and (> i 0) (= (mod i 16) 0)) (put-string out "\n"))
+        (when (> i 0) (put-char out #\,))
+        (put-string out (format "0x~2,'0x" (bytevector-u8-ref data i)))
+        (loop (+ i 1))))
+    (put-string out "\n};\n")
+    (put-string out (format "static const long ~a_size = ~a;\n\n" array-name size))))
+
+;; ========================================
+;; Collect library .so files needed by a program
+;; ========================================
+(define (collect-library-sos chez-source lib-dirs)
+  ;; Parse the transpiled .chez.ss to find import forms,
+  ;; then locate the corresponding .so files
+  (let* ((imports (call-with-input-file chez-source
+                    (lambda (port)
+                      (let ((form (read port)))
+                        ;; form is: (import (except (chezscheme) ...) (lib1) (lib2) ...)
+                        (if (and (pair? form) (eq? (car form) 'import))
+                          (filter (lambda (imp)
+                                    ;; Skip (chezscheme) and (except (chezscheme) ...)
+                                    (not (or (and (pair? imp) (eq? (car imp) 'chezscheme))
+                                             (and (pair? imp) (eq? (car imp) 'except)
+                                                  (pair? (cdr imp))
+                                                  (pair? (cadr imp))
+                                                  (eq? (car (cadr imp)) 'chezscheme)))))
+                                  (cdr form))
+                          '())))))
+         ;; Convert library name to file path: (compat gambit-compat) → compat/gambit-compat.so
+         (lib-paths
+           (map (lambda (imp)
+                  (let* ((parts (if (and (pair? imp) (eq? (car imp) 'except))
+                                  (cadr imp)  ;; (except (lib name) ...) → (lib name)
+                                  imp))
+                         (path-parts (map symbol->string parts))
+                         (rel-path (apply string-append
+                                     (let lp ((ps path-parts) (acc '()))
+                                       (if (null? ps)
+                                         (reverse acc)
+                                         (lp (cdr ps)
+                                             (if (null? acc)
+                                               (list (car ps))
+                                               (cons (car ps) (cons "/" acc)))))))))
+                    (string-append rel-path ".so")))
+                imports)))
+    ;; Find each .so in the library directories
+    (let ((results '()))
+      (for-each
+        (lambda (rel)
+          (let search ((dirs lib-dirs))
+            (cond
+              ((null? dirs)
+               (display (format "  WARNING: library not found: ~a\n" rel)
+                        (current-error-port)))
+              (else
+               (let ((full (string-append (car dirs) "/" rel)))
+                 (if (file-exists? full)
+                   (set! results (cons full results))
+                   (search (cdr dirs))))))))
+        lib-paths)
+      (reverse results))))
+
+;; ========================================
+;; Generate the C main file
+;; ========================================
+(define (generate-main-c output-path chez-dir boot-path so-path)
+  (call-with-output-file output-path
+    (lambda (out)
+      (put-string out "#define _GNU_SOURCE\n")
+      (put-string out "#include <stdio.h>\n")
+      (put-string out "#include <string.h>\n")
+      (put-string out "#include <unistd.h>\n")
+      (put-string out "#include <sys/mman.h>\n")
+      (put-string out "#include \"scheme.h\"\n\n")
+
+      ;; Embed boot files
+      (file->c-array (format "~a/petite.boot" chez-dir) "petite_boot" out)
+      (file->c-array (format "~a/scheme.boot" chez-dir) "scheme_boot" out)
+      (file->c-array boot-path "app_boot" out)
+
+      ;; Embed the program .so
+      (file->c-array so-path "program_data" out)
+
+      ;; Main function
+      (put-string out "int main(int argc, const char *argv[]) {\n")
+      (put-string out "  Sscheme_init(NULL);\n")
+      (put-string out "  Sregister_boot_file_bytes(\"petite\", (void*)petite_boot, petite_boot_size);\n")
+      (put-string out "  Sregister_boot_file_bytes(\"scheme\", (void*)scheme_boot, scheme_boot_size);\n")
+      (put-string out "  Sregister_boot_file_bytes(\"app\", (void*)app_boot, app_boot_size);\n")
+      (put-string out "  Sbuild_heap(NULL, NULL);\n\n")
+
+      ;; Write program to memfd and run via Sscheme_script
+      (put-string out "  int fd = memfd_create(\"program\", MFD_CLOEXEC);\n")
+      (put-string out "  if (write(fd, program_data, program_data_size) < 0) { perror(\"write\"); return 1; }\n")
+      (put-string out "  lseek(fd, 0, SEEK_SET);\n")
+      (put-string out "  char prog_path[64];\n")
+      ;; Use %d directly — this is C source, not a format string
+      (put-string out "  snprintf(prog_path, sizeof(prog_path), \"/proc/self/fd/%d\", fd);\n\n")
+
+      (put-string out "  int status = Sscheme_script(prog_path, argc, argv);\n")
+      (put-string out "  close(fd);\n")
+      (put-string out "  Sscheme_deinit();\n")
+      (put-string out "  return status;\n")
+      (put-string out "}\n"))
+    'replace))
+
+;; ========================================
+;; Main compilation pipeline
+;; ========================================
 (let* ((args (cdr (command-line)))
        (input-path (list-ref args 0))
        (output-base (list-ref args 1))
@@ -116,8 +285,10 @@ exec scheme -q --libdirs ".:src" --compile-imported-libraries --program /dev/std
        (root-dir (list-ref args 5))
        (extra-libdirs (list-ref args 6))
        (pkg-prefix (list-ref args 7))
+       (chez-dir (list-ref args 8))
        (chez-path (string-append output-base ".chez.ss"))
        (so-path (string-append output-base ".chez.so"))
+       (extra-dirs (split-colons extra-libdirs))
        ;; Build import map with package prefix override
        (import-map
          (if (string=? pkg-prefix "gsh")
@@ -157,52 +328,63 @@ exec scheme -q --libdirs ".:src" --compile-imported-libraries --program /dev/std
 
       (else
        ;; Step 3: Compile the program with absolute library paths
-       ;; compile-program resolves libraries relative to source file,
-       ;; so we must use absolute paths in library-directories.
-       ;; Parse extra-libdirs (colon-separated) into library-directories entries
-       (let ((extra-dirs
-               (if (string=? extra-libdirs "")
-                 '()
-                 (let split ((s extra-libdirs) (acc '()))
-                   (let ((pos (let lp ((i 0))
-                                (cond
-                                  ((= i (string-length s)) #f)
-                                  ((char=? (string-ref s i) #\:) i)
-                                  (else (lp (+ i 1)))))))
-                     (if pos
-                       (let ((part (substring s 0 pos)))
-                         (split (substring s (+ pos 1) (string-length s))
-                                (if (string=? part "") acc (cons part acc))))
-                       (if (string=? s "") (reverse acc) (reverse (cons s acc)))))))))
-       (parameterize ([library-directories
-                        (append
-                          (list (cons root-dir root-dir)
-                                (cons (string-append root-dir "/src")
-                                      (string-append root-dir "/src")))
-                          (map (lambda (d) (cons d d)) extra-dirs)
-                          (library-directories))])
-         (compile-program chez-path))
+       (let ((all-lib-dirs
+               (append
+                 (list (cons root-dir root-dir)
+                       (cons (string-append root-dir "/src")
+                             (string-append root-dir "/src")))
+                 (map (lambda (d) (cons d d)) extra-dirs)
+                 (library-directories))))
+         (display (format "compiling ~a with output to ~a\n" chez-path so-path))
+         (parameterize ([library-directories all-lib-dirs])
+           (compile-program chez-path))
 
-       (display (string-append "Compiled: " input-path " → " so-path "\n"))
+         ;; Step 4: Collect library .so files and create boot file
+         (let* ((search-dirs (append (list root-dir (string-append root-dir "/src"))
+                                     extra-dirs))
+                (lib-sos (collect-library-sos chez-path search-dirs))
+                (boot-path (string-append output-base ".boot")))
 
-       ;; Step 4: Create executable wrapper script
-       (call-with-output-file output-base
-         (lambda (port)
-           (display "#!/bin/sh\n" port)
-           (display "# Generated by gxc from " port)
-           (display input-path port)
-           (newline port)
-           (display (string-append
-                      "exec scheme --libdirs \""
-                      root-dir ":" root-dir "/src"
-                      (if (string=? extra-libdirs "") "" (string-append ":" extra-libdirs))
-                      "\" --program \"" so-path "\" \"$@\"\n")
-                    port))
-         'replace)
-       (chmod output-base #o755)
-       (display (string-append "Executable: " output-base "\n"))
+           (when verbose?
+             (display "--- Libraries for boot file ---\n" (current-error-port))
+             (for-each (lambda (p) (display (format "  ~a\n" p) (current-error-port))) lib-sos)
+             (display "--- End ---\n" (current-error-port)))
 
-       (when run-after?
-         (display "--- Running ---\n")
-         (load-program so-path)))))))
+           ;; Create boot file with all needed libraries
+           (apply make-boot-file boot-path '("scheme" "petite") lib-sos)
+
+           ;; Step 5: Generate C main with embedded boot files + program
+           (let ((c-path (string-append output-base ".gxc.c")))
+             (display (format "generating ~a\n" c-path))
+             (generate-main-c c-path chez-dir boot-path so-path)
+
+             ;; Step 6: Compile and link the ELF binary
+             (display (format "linking ~a\n" output-base))
+             (let ((gcc-cmd (format "gcc -O2 -o ~a -I~a ~a -L~a -lkernel -llz4 -lz -lm -ldl -lpthread -luuid -lncurses -rdynamic 2>&1"
+                                    output-base chez-dir c-path chez-dir)))
+               (let ((status (system gcc-cmd)))
+                 (unless (zero? status)
+                   (display (format "\nError: gcc linking failed (status ~a)\n" status)
+                            (current-error-port))
+                   (display (format "Command: ~a\n" gcc-cmd) (current-error-port))
+                   (exit 1))))
+
+             ;; Strip debug symbols to reduce size
+             (system (format "strip ~a 2>/dev/null" output-base))
+
+             ;; Clean up intermediate files (keep .chez.ss and .chez.so for debugging)
+             (when (file-exists? c-path) (delete-file c-path))
+             (when (file-exists? boot-path) (delete-file boot-path))
+
+             (let* ((p (open-file-input-port output-base))
+                    (size (port-length p)))
+               (close-port p)
+               (display (format "~a (~a MB standalone ELF)\n"
+                                output-base
+                                (/ (round (* (/ size 1048576.0) 10)) 10))))
+
+             (when run-after?
+               (display "--- Running ---\n")
+               (let ((status (system output-base)))
+                 (exit (if (zero? status) 0 1)))))))))))
 SCHEME_EOF
