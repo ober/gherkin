@@ -47,6 +47,21 @@
 
   (define repl-env (interaction-environment))
 
+  ;; Source registry: maps symbol → original source form for ,dis of defined names
+  (define *source-registry* (make-hashtable symbol-hash eq?))
+
+  ;; Extract the defined name from a def/define form, or #f
+  (define (defined-name form)
+    (and (pair? form)
+         (memq (car form) '(def define def*))
+         (pair? (cdr form))
+         (let ((name-part (cadr form)))
+           (cond
+             ((symbol? name-part) name-part)
+             ((and (pair? name-part) (symbol? (car name-part)))
+              (car name-part))
+             (else #f)))))
+
   (define (init-repl-env!)
     ;; Load runtime bindings into the interaction environment so that
     ;; compiled forms (defstruct, defclass, etc.) can reference them.
@@ -197,10 +212,27 @@
         ((memq cmd '(dis disassemble))
          (let ((next (gerbil-read (current-input-port))))
            (if (eof-object? next)
-             (printf "Usage: ,dis <form>~n")
-             (let ((datum (strip-annotations next)))
+             (printf "Usage: ,dis <form>  or  ,dis <name>~n")
+             (let* ((datum (strip-annotations next))
+                    ;; If datum is a symbol, look up its source definition.
+                    ;; Also handle (quote sym) from ,dis 'name
+                    (target
+                      (cond
+                        ((and (symbol? datum)
+                              (hashtable-ref *source-registry* datum #f))
+                         => (lambda (src) src))
+                        ((and (pair? datum) (eq? (car datum) 'quote)
+                              (pair? (cdr datum)) (symbol? (cadr datum))
+                              (hashtable-ref *source-registry* (cadr datum) #f))
+                         => (lambda (src) src))
+                        (else datum))))
+               (when (and (symbol? datum) (eq? target datum))
+                 (printf "Note: ~a not found in source registry; disassembling as expression.~n"
+                         datum)
+                 (printf "Define it in this REPL session first, then ,dis ~a will show its assembly.~n~n"
+                         datum))
                (guard (exn (#t (display-error "dis error" exn)))
-                 (let* ((compiled (gerbil-compile-top datum))
+                 (let* ((compiled (gerbil-compile-top target))
                         (optimized
                           (parameterize ([print-gensym #f])
                             (expand/optimize compiled repl-env))))
@@ -223,10 +255,15 @@
     (printf "  ,h ,help     Show this help~n")
     (printf "  ,load <file> Load and eval a Gerbil file~n")
     (printf "  ,expand <form> Show compiled output~n")
-    (printf "  ,dis <form>   Show compiled + optimized + assembly output~n"))
+    (printf "  ,dis <form>   Show compiled + optimized + assembly output~n")
+    (printf "  ,dis <name>   Disassemble a previously defined function~n"))
 
   (define (eval-and-print form)
     (guard (exn (#t (display-error "error" exn)))
+      ;; Store source for defined names so ,dis can find them later
+      (let ((name (defined-name form)))
+        (when name
+          (hashtable-set! *source-registry* name form)))
       (let ((compiled (gerbil-compile-top form)))
         (call-with-values
           (lambda () (chez:eval compiled repl-env))
@@ -265,6 +302,9 @@
             ((and (pair? form) (eq? (car form) 'import))
              (eval-import-form form))
             (else
+             (let ((name (defined-name form)))
+               (when name
+                 (hashtable-set! *source-registry* name form)))
              (guard (exn
                       (#t (display-error "warning" exn)))
                (let ((compiled (gerbil-compile-top form)))
