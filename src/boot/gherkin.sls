@@ -75,42 +75,23 @@
     (gherkin-compile-and-eval input-path))
 
   ;; --- Compile to native binary ---
-  ;; Creates a Chez Scheme program file and compiles it
+  ;; Creates a Chez Scheme program file and compiles it.
+  ;; Uses gerbil-compile-to-program to properly resolve Gerbil imports.
   (define (gherkin-make-binary input-path output-path)
-    ;; Step 1: Compile Gerbil → Chez
     (let* ((chez-path (string-append output-path ".ss"))
-           (compiled-forms (gerbil-compile-file input-path)))
-      ;; Step 2: Write Chez program
+           (program-forms (gerbil-compile-to-program input-path)))
+      ;; Write Chez program
       (call-with-output-file chez-path
         (lambda (port)
-          ;; Add #!chezscheme directive for gensym support
           (display "#!chezscheme\n" port)
-          ;; Write import preamble
           (parameterize ([print-gensym #f])
-          (pretty-print
-            '(import
-               (except (chezscheme) void box box? unbox set-box!
-                       andmap ormap iota last-pair find
-                       1+ 1- fx/ fx1+ fx1-
-                       identifier?
-                       hash-table? make-hash-table)
-               (compat types)
-               (runtime util)
-               (except (runtime table) string-hash)
-               (runtime mop)
-               (runtime hash)
-               (runtime syntax))
-            port)
-          (newline port)
-          ;; Write compiled forms
-          (for-each
-            (lambda (form)
-              (pretty-print form port)
-              (newline port))
-            compiled-forms)))  ;; close parameterize
+            (for-each
+              (lambda (form)
+                (pretty-print form port)
+                (newline port))
+              program-forms)))
         'replace)
-      ;; Step 3: Compile with Chez
-      ;; The output .so file can be loaded or used as a program
+      ;; Compile with Chez
       (chez:compile-file chez-path)
       (display (string-append "Compiled: " input-path " → " chez-path "\n"))
       chez-path))

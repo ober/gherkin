@@ -130,6 +130,20 @@
 
     ;; Property lists
     |##putprop| |##getprop| |##remprop|
+
+    ;; Gambit threading API → Chez threading
+    thread-sleep! make-thread thread-start! thread-join!
+    thread-yield!
+
+    ;; SMP stubs (Chez doesn't have Gambit's SMP model)
+    |##set-parallelism-level!| |##startup-parallelism!|
+    |##current-vm-processor-count|
+
+    ;; Process statistics
+    |##process-statistics|
+
+    ;; f64vector (Gambit's native float64 vectors)
+    f64vector-ref f64vector-set! make-f64vector f64vector-length
     )
 
   (import (except (chezscheme)
@@ -710,5 +724,97 @@
   (define |##putprop| putprop)
   (define |##getprop| getprop)
   (define |##remprop| remprop)
+
+  ;;;; Gambit threading API → Chez threading
+  ;;;; Gambit uses SRFI-18 style: make-thread, thread-start!, thread-join!
+  ;;;; Chez uses: fork-thread, mutex, condition
+  ;;;; We bridge the gap with a simple thread record.
+
+  (define-record-type gambit-thread
+    (fields thunk (mutable result) (mutable done?) mutex condvar)
+    (protocol
+      (lambda (new)
+        (lambda (thunk)
+          (new thunk (void) #f (make-mutex) (make-condition))))))
+
+  (define (make-thread thunk . name)
+    (make-gambit-thread thunk))
+
+  (define (thread-start! t)
+    (fork-thread
+      (lambda ()
+        (let ((result (guard (e [#t e])
+                        ((gambit-thread-thunk t)))))
+          (gambit-thread-result-set! t result)
+          (mutex-acquire (gambit-thread-mutex t))
+          (gambit-thread-done?-set! t #t)
+          (condition-broadcast (gambit-thread-condvar t))
+          (mutex-release (gambit-thread-mutex t)))))
+    t)
+
+  (define (thread-join! t)
+    (mutex-acquire (gambit-thread-mutex t))
+    (let lp ()
+      (unless (gambit-thread-done? t)
+        (condition-wait (gambit-thread-condvar t) (gambit-thread-mutex t))
+        (lp)))
+    (mutex-release (gambit-thread-mutex t))
+    (gambit-thread-result t))
+
+  (define (thread-sleep! seconds)
+    ;; Chez's sleep takes a time duration
+    (let ((ns (inexact->exact (round (* seconds 1000000000)))))
+      (sleep (make-time 'time-duration ns 0))))
+
+  (define (thread-yield!)
+    ;; No direct equivalent; sleep briefly
+    (sleep (make-time 'time-duration 0 0)))
+
+  ;;;; SMP stubs
+  ;;;; Chez Scheme doesn't have Gambit's SMP threading model.
+  ;;;; These are no-ops so that Gambit SMP code compiles and runs single-threaded.
+  (define (|##set-parallelism-level!| n) (void))
+  (define (|##startup-parallelism!|) (void))
+  (define (|##current-vm-processor-count|) 1)
+
+  ;;;; Process statistics
+  ;;;; Gambit's ##process-statistics returns an f64vector:
+  ;;;;   [0] = user time, [1] = system time, [2] = real/wall time,
+  ;;;;   [3] = gc user time, [4] = gc system time, [5] = gc real time,
+  ;;;;   [6] = nb GCs, [7] = bytes allocated, ...
+  ;;;; We approximate using Chez's (current-time).
+  (define (|##process-statistics|)
+    (let* ((wall (current-time 'time-monotonic))
+           (cpu  (current-time 'time-thread))
+           (wall-secs (+ (time-second wall)
+                         (/ (time-nanosecond wall) 1000000000.0)))
+           (cpu-secs  (+ (time-second cpu)
+                         (/ (time-nanosecond cpu) 1000000000.0))))
+      ;; Return as a regular vector; f64vector-ref works on it via our stubs
+      (let ((v (make-f64vector 8 0.0)))
+        (f64vector-set! v 0 cpu-secs)     ;; user time
+        (f64vector-set! v 1 0.0)          ;; system time
+        (f64vector-set! v 2 wall-secs)    ;; wall time
+        v)))
+
+  ;;;; f64vector (Gambit's native float64 vectors)
+  ;;;; Implemented on top of Chez bytevectors with IEEE double precision.
+  (define (make-f64vector n . rest)
+    (let ((bv (make-bytevector (* n 8) 0)))
+      (when (pair? rest)
+        (let ((fill (car rest)))
+          (do ((i 0 (fx+ i 1)))
+              ((fx= i n))
+            (bytevector-ieee-double-native-set! bv (* i 8) (inexact fill)))))
+      bv))
+
+  (define (f64vector-ref bv i)
+    (bytevector-ieee-double-native-ref bv (* i 8)))
+
+  (define (f64vector-set! bv i val)
+    (bytevector-ieee-double-native-set! bv (* i 8) (inexact val)))
+
+  (define (f64vector-length bv)
+    (fx/ (bytevector-length bv) 8))
 
   ) ;; end library

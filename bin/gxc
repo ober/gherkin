@@ -1,0 +1,170 @@
+#!/bin/sh
+# gxc -- Gherkin compiler
+# Compiles a Gerbil .ss file to a Chez Scheme executable
+#
+# Usage:
+#   gxc <input.ss>              # compile to input (executable wrapper)
+#   gxc <input.ss> -o <output>  # compile to named output
+#   gxc <input.ss> -t           # transpile only (emit .ss, don't compile)
+#   gxc <input.ss> -r           # compile and run immediately
+
+# Resolve project root from script location
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+usage() {
+    echo "Usage: gxc [options] <input.ss>"
+    echo ""
+    echo "Options:"
+    echo "  -o <output>   Set output name (default: input basename)"
+    echo "  -t            Transpile only (emit Chez .ss, don't compile)"
+    echo "  -r            Compile and run immediately"
+    echo "  -v            Verbose: show generated Chez source"
+    echo "  -L <dir>      Add library search path"
+    echo "  -h            Show this help"
+    exit "${1:-0}"
+}
+
+OUTPUT=""
+TRANSPILE_ONLY=""
+RUN_AFTER=""
+VERBOSE=""
+EXTRA_LIBDIRS=""
+INPUT=""
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -o) OUTPUT="$2"; shift 2 ;;
+        -t) TRANSPILE_ONLY=1; shift ;;
+        -r) RUN_AFTER=1; shift ;;
+        -v) VERBOSE=1; shift ;;
+        -L) EXTRA_LIBDIRS="$EXTRA_LIBDIRS:$2"; shift 2 ;;
+        -h|--help) usage 0 ;;
+        -*) echo "Unknown option: $1"; usage 1 ;;
+        *)
+            if [ -z "$INPUT" ]; then
+                INPUT="$1"
+            else
+                echo "Error: multiple input files not supported"
+                exit 1
+            fi
+            shift
+            ;;
+    esac
+done
+
+if [ -z "$INPUT" ]; then
+    echo "Error: no input file specified"
+    usage 1
+fi
+
+if [ ! -f "$INPUT" ]; then
+    echo "Error: file not found: $INPUT"
+    exit 1
+fi
+
+# Derive output name from input if not specified
+if [ -z "$OUTPUT" ]; then
+    OUTPUT="$(echo "$INPUT" | sed 's/\.ss$//')"
+fi
+
+# Make output absolute
+case "$OUTPUT" in
+    /*) ;;
+    *) OUTPUT="$(pwd)/$OUTPUT" ;;
+esac
+
+INPUT_ABS="$(cd "$(dirname "$INPUT")" && pwd)/$(basename "$INPUT")"
+
+# Run from project root so relative library paths work for initial load
+cd "$ROOT"
+
+exec scheme -q --libdirs ".:src" --compile-imported-libraries --program /dev/stdin \
+    "$INPUT_ABS" "$OUTPUT" "${TRANSPILE_ONLY:-0}" "${VERBOSE:-0}" "${RUN_AFTER:-0}" \
+    "$ROOT" "$EXTRA_LIBDIRS" <<'SCHEME_EOF'
+#!chezscheme
+(import
+  (except (chezscheme) void box box? unbox set-box!
+          andmap ormap iota last-pair find
+          1+ 1- fx/ fx1+ fx1-
+          error error? raise with-exception-handler identifier?
+          hash-table? make-hash-table)
+  (compiler compile)
+  (boot gherkin))
+
+(let* ((args (cdr (command-line)))
+       (input-path (list-ref args 0))
+       (output-base (list-ref args 1))
+       (transpile-only? (string=? (list-ref args 2) "1"))
+       (verbose? (string=? (list-ref args 3) "1"))
+       (run-after? (string=? (list-ref args 4) "1"))
+       (root-dir (list-ref args 5))
+       (extra-libdirs (list-ref args 6))
+       (chez-path (string-append output-base ".chez.ss"))
+       (so-path (string-append output-base ".chez.so")))
+
+  ;; Step 1: Transpile Gerbil → Chez program
+  (let ((program-forms (gerbil-compile-to-program input-path)))
+
+    ;; Step 2: Write Chez program file
+    (call-with-output-file chez-path
+      (lambda (port)
+        (display "#!chezscheme\n" port)
+        (parameterize ([print-gensym #f])
+          (for-each
+            (lambda (form)
+              (pretty-print form port)
+              (newline port))
+            program-forms)))
+      'replace)
+
+    (when verbose?
+      (display "--- Generated Chez source ---\n" (current-error-port))
+      (call-with-input-file chez-path
+        (lambda (port)
+          (let loop ()
+            (let ((line (get-line port)))
+              (unless (eof-object? line)
+                (display line (current-error-port))
+                (newline (current-error-port))
+                (loop))))))
+      (display "--- End ---\n" (current-error-port)))
+
+    (cond
+      (transpile-only?
+       (display (string-append "Transpiled: " input-path " → " chez-path "\n")))
+
+      (else
+       ;; Step 3: Compile the program with absolute library paths
+       ;; compile-program resolves libraries relative to source file,
+       ;; so we must use absolute paths in library-directories.
+       (parameterize ([library-directories
+                        (append
+                          (list (cons root-dir root-dir)
+                                (cons (string-append root-dir "/src")
+                                      (string-append root-dir "/src")))
+                          (library-directories))])
+         (compile-program chez-path))
+
+       (display (string-append "Compiled: " input-path " → " so-path "\n"))
+
+       ;; Step 4: Create executable wrapper script
+       (call-with-output-file output-base
+         (lambda (port)
+           (display "#!/bin/sh\n" port)
+           (display "# Generated by gxc from " port)
+           (display input-path port)
+           (newline port)
+           (display (string-append
+                      "exec scheme --libdirs \""
+                      root-dir ":" root-dir "/src"
+                      "\" --program \"" so-path "\" \"$@\"\n")
+                    port))
+         'replace)
+       (chmod output-base #o755)
+       (display (string-append "Executable: " output-base "\n"))
+
+       (when run-after?
+         (display "--- Running ---\n")
+         (load-program so-path))))))
+SCHEME_EOF

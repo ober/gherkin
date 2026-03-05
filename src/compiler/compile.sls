@@ -9,6 +9,7 @@
     gerbil-compile-expression
     gerbil-compile-file
     gerbil-compile-to-library
+    gerbil-compile-to-program
     collect-defined-names
     strip-annotations
     resolve-import
@@ -464,6 +465,11 @@
             (if (null? (cdr expr))
               '(get-line (current-input-port))
               `(get-line ,(gerbil-compile-expression (cadr expr)))))
+           ;; force-output: Gambit force-output → Chez flush-output-port
+           ((eq? head 'force-output)
+            (if (null? (cdr expr))
+              '(flush-output-port (current-output-port))
+              `(flush-output-port ,(gerbil-compile-expression (cadr expr)))))
            ;; pp / pretty-print
            ((memq head '(pp pretty-print))
             `(pretty-print ,@(map gerbil-compile-expression (cdr expr))))
@@ -2364,6 +2370,98 @@
                      ,@phase1-imports)
              ,@compiled-body)))))
 
+  ;; --- Program compilation ---
+  ;; Compile a Gerbil source file to a Chez Scheme program (not a library).
+  ;; Returns a list of forms: ((import ...) body-form1 body-form2 ...)
+  ;; import-map: optional alist mapping Gerbil module paths to Chez library names
+  ;; base-imports: Chez imports always included (runtime, gambit-compat, etc.)
+
+  ;; Compat libraries that shadow names from (chezscheme).
+  ;; When a compat lib is imported into a program, these names must be
+  ;; excluded from (chezscheme) to avoid "multiple definitions" errors.
+  (define *compat-chez-exclusions*
+    '(((compat misc)          . (filter iota remove partition fold-right
+                                  last-pair path-extension))
+      ((compat std-getopt)    . (filter find))
+      ((compat std-logger)    . (errorf))
+      ((compat std-os-path)   . (path-extension))
+      ((compat std-srfi-13)   . ())
+      ((compat signal-handler) . (filter))
+      ((compat std-misc-alist) . (filter))
+      ((compat gambit-compat) . (void box box? unbox set-box!))))
+
+  ;; Always excluded from (chezscheme) — these are redefined by our runtime
+  (define *always-excluded-from-chez*
+    '(void box box? unbox set-box!
+      andmap ormap iota last-pair find
+      1+ 1- fx/ fx1+ fx1-
+      error error? raise with-exception-handler identifier?
+      hash-table? make-hash-table))
+
+  (define (gerbil-compile-to-program input-path . rest)
+    (let ((import-map (if (pair? rest) (car rest) '()))
+          (base-imports-override
+            (and (pair? rest) (pair? (cdr rest)) (cadr rest)))
+          (source-dir (let ((s (if (string? input-path) input-path "")))
+                        (let lp ((i (- (string-length s) 1)))
+                          (cond
+                            ((< i 0) "")
+                            ((char=? (string-ref s i) #\/)
+                             (substring s 0 i))
+                            (else (lp (- i 1))))))))
+      (let ((forms (read-all-forms input-path))
+            (imports '())
+            (body '()))
+        ;; Separate imports and body; strip exports
+        (for-each
+          (lambda (form)
+            (cond
+              ((and (pair? form) (eq? (car form) 'import))
+               (set! imports
+                 (append imports (expand-group-in (cdr form)))))
+              ((and (pair? form) (eq? (car form) 'export))
+               #f)  ;; strip exports for programs
+              ((and (pair? form) (memq (car form) '(prelude: package: namespace:)))
+               #f)  ;; skip Gerbil headers
+              (else
+               (set! body (cons form body)))))
+          forms)
+        ;; Compile the body
+        (let* ((compiled-body (map gerbil-compile-top (reverse body)))
+               ;; Resolve Gerbil imports to Chez library specs
+               (resolved-imports
+                 (compile-library-imports imports import-map '() source-dir))
+               ;; Compute Chez exclusions based on which compat libs are imported
+               (extra-exclusions
+                 (let lp ((libs resolved-imports) (excl '()))
+                   (if (null? libs)
+                     excl
+                     (let ((entry (assoc (car libs) *compat-chez-exclusions*)))
+                       (lp (cdr libs)
+                           (if entry
+                             (append (cdr entry) excl)
+                             excl))))))
+               (all-exclusions
+                 (let lp ((syms (append *always-excluded-from-chez*
+                                        extra-exclusions))
+                          (seen '()) (result '()))
+                   (cond
+                     ((null? syms) (reverse result))
+                     ((memq (car syms) seen) (lp (cdr syms) seen result))
+                     (else (lp (cdr syms)
+                               (cons (car syms) seen)
+                               (cons (car syms) result))))))
+               (chez-import
+                 (if (null? all-exclusions)
+                   '(chezscheme)
+                   `(except (chezscheme) ,@all-exclusions)))
+               (base-imports
+                 (or base-imports-override
+                     `(,chez-import (compat gambit-compat)))))
+          ;; Generate program
+          (cons `(import ,@base-imports ,@resolved-imports)
+                compiled-body)))))
+
   ;; --- R6RS body reordering ---
   ;; Partition body into definitions and expressions, with definitions first.
   (define (reorder-library-body forms)
@@ -2490,7 +2588,7 @@
   ;; --- Import path mapping ---
   ;; Default import map for gerbil-shell modules
   (define *default-import-map*
-    '((:std/sugar       . (compat sugar))
+    '((:std/sugar       . #f)  ;; stripped — compiler handles sugar forms natively
       (:std/format      . (compat format))
       (:std/sort        . (compat sort))
       (:std/pregexp     . (compat pregexp))
