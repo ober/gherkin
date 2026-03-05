@@ -30,6 +30,7 @@ TRANSPILE_ONLY=""
 RUN_AFTER=""
 VERBOSE=""
 EXTRA_LIBDIRS=""
+PKG_PREFIX=""
 INPUT=""
 
 while [ $# -gt 0 ]; do
@@ -39,6 +40,7 @@ while [ $# -gt 0 ]; do
         -r) RUN_AFTER=1; shift ;;
         -v) VERBOSE=1; shift ;;
         -L) EXTRA_LIBDIRS="$EXTRA_LIBDIRS:$2"; shift 2 ;;
+        -p) PKG_PREFIX="$2"; shift 2 ;;
         -h|--help) usage 0 ;;
         -*) echo "Unknown option: $1"; usage 1 ;;
         *)
@@ -79,9 +81,22 @@ INPUT_ABS="$(cd "$(dirname "$INPUT")" && pwd)/$(basename "$INPUT")"
 # Run from project root so relative library paths work for initial load
 cd "$ROOT"
 
+# Auto-detect package prefix from gerbil.pkg if not specified
+if [ -z "$PKG_PREFIX" ]; then
+    # Walk up from input file to find gerbil.pkg
+    _dir="$(cd "$(dirname "$INPUT_ABS")" && pwd)"
+    while [ "$_dir" != "/" ]; do
+        if [ -f "$_dir/gerbil.pkg" ]; then
+            PKG_PREFIX="$(sed -n 's/^(package: \([^)]*\))/\1/p' "$_dir/gerbil.pkg")"
+            break
+        fi
+        _dir="$(dirname "$_dir")"
+    done
+fi
+
 exec scheme -q --libdirs ".:src" --compile-imported-libraries --program /dev/stdin \
     "$INPUT_ABS" "$OUTPUT" "${TRANSPILE_ONLY:-0}" "${VERBOSE:-0}" "${RUN_AFTER:-0}" \
-    "$ROOT" "$EXTRA_LIBDIRS" <<'SCHEME_EOF'
+    "$ROOT" "$EXTRA_LIBDIRS" "${PKG_PREFIX:-gsh}" <<'SCHEME_EOF'
 #!chezscheme
 (import
   (except (chezscheme) void box box? unbox set-box!
@@ -100,11 +115,17 @@ exec scheme -q --libdirs ".:src" --compile-imported-libraries --program /dev/std
        (run-after? (string=? (list-ref args 4) "1"))
        (root-dir (list-ref args 5))
        (extra-libdirs (list-ref args 6))
+       (pkg-prefix (list-ref args 7))
        (chez-path (string-append output-base ".chez.ss"))
-       (so-path (string-append output-base ".chez.so")))
+       (so-path (string-append output-base ".chez.so"))
+       ;; Build import map with package prefix override
+       (import-map
+         (if (string=? pkg-prefix "gsh")
+           '()  ;; default
+           `((*default-package* . ,(string->symbol pkg-prefix))))))
 
   ;; Step 1: Transpile Gerbil → Chez program
-  (let ((program-forms (gerbil-compile-to-program input-path)))
+  (let ((program-forms (gerbil-compile-to-program input-path import-map)))
 
     ;; Step 2: Write Chez program file
     (call-with-output-file chez-path
@@ -138,11 +159,27 @@ exec scheme -q --libdirs ".:src" --compile-imported-libraries --program /dev/std
        ;; Step 3: Compile the program with absolute library paths
        ;; compile-program resolves libraries relative to source file,
        ;; so we must use absolute paths in library-directories.
+       ;; Parse extra-libdirs (colon-separated) into library-directories entries
+       (let ((extra-dirs
+               (if (string=? extra-libdirs "")
+                 '()
+                 (let split ((s extra-libdirs) (acc '()))
+                   (let ((pos (let lp ((i 0))
+                                (cond
+                                  ((= i (string-length s)) #f)
+                                  ((char=? (string-ref s i) #\:) i)
+                                  (else (lp (+ i 1)))))))
+                     (if pos
+                       (let ((part (substring s 0 pos)))
+                         (split (substring s (+ pos 1) (string-length s))
+                                (if (string=? part "") acc (cons part acc))))
+                       (if (string=? s "") (reverse acc) (reverse (cons s acc)))))))))
        (parameterize ([library-directories
                         (append
                           (list (cons root-dir root-dir)
                                 (cons (string-append root-dir "/src")
                                       (string-append root-dir "/src")))
+                          (map (lambda (d) (cons d d)) extra-dirs)
                           (library-directories))])
          (compile-program chez-path))
 
@@ -158,6 +195,7 @@ exec scheme -q --libdirs ".:src" --compile-imported-libraries --program /dev/std
            (display (string-append
                       "exec scheme --libdirs \""
                       root-dir ":" root-dir "/src"
+                      (if (string=? extra-libdirs "") "" (string-append ":" extra-libdirs))
                       "\" --program \"" so-path "\" \"$@\"\n")
                     port))
          'replace)
@@ -166,5 +204,5 @@ exec scheme -q --libdirs ".:src" --compile-imported-libraries --program /dev/std
 
        (when run-after?
          (display "--- Running ---\n")
-         (load-program so-path))))))
+         (load-program so-path)))))))
 SCHEME_EOF

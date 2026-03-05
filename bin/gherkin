@@ -1,0 +1,129 @@
+#!/bin/sh
+# gherkin -- Universal binary for the Gherkin toolchain
+# Equivalent of Gerbil's `gerbil` command.
+#
+# Usage:
+#   gherkin build           build the current project
+#   gherkin deps -i         install dependencies
+#   gherkin clean           clean build artifacts
+#   gherkin new             create a new project
+#   gherkin pkg <cmd>       package manager commands
+#   gherkin compile <f>     compile a file (gxc)
+#   gherkin interactive     start REPL (gxi)
+#   gherkin help            show help
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+export GHERKIN_ROOT="$ROOT"
+
+version() {
+    echo "Gherkin 0.1.0 (Gerbil-on-Chez)"
+    echo "Built on Chez Scheme"
+    scheme --version 2>&1 || true
+}
+
+usage() {
+    cat <<'EOF'
+Usage: gherkin [option ...] <command> [args...]
+
+Options:
+  -h, --help               display this help message
+  -v, --version            display version and exit
+
+Commands:
+  build [pkg]              build a gherkin package (gxpkg build)
+  deps [-i|-u|-r] [dep]    manage dependencies (gxpkg deps)
+  clean [pkg]              clean build artifacts (gxpkg clean)
+  new [-p pkg] [-n name]   create a new project template (gxpkg new)
+  install <pkg>            install a package
+  link <pkg> <src>         link a local dev package
+  unlink <pkg>             unlink a package
+  list                     list installed packages
+  pkg <subcmd>             invoke the package manager directly
+  compile <file.ss>        compile a Gerbil .ss file (gxc)
+  interactive              start the Gherkin REPL (gxi)
+  help [cmd]               display help for a command
+
+Aliases:
+  gxi                      → gherkin interactive
+  gxc                      → gherkin compile
+  gxpkg                    → gherkin pkg
+
+Try 'gherkin help <cmd>' for help on a specific command.
+EOF
+}
+
+# No arguments → show usage
+if [ $# -eq 0 ]; then
+    usage
+    exit 0
+fi
+
+CMD="$1"
+shift
+
+case "$CMD" in
+    -h|--help|help)
+        if [ $# -eq 0 ]; then
+            usage
+        else
+            # Dispatch help to pkg manager
+            exec scheme -q --libdirs "$ROOT:$ROOT/src" --compile-imported-libraries \
+                --program /dev/stdin -- "help" "$@" <<'SCHEME'
+#!chezscheme
+(import (chezscheme) (tools pkg))
+;; Skip program name and "--" separator from command-line
+(let ((args (cdr (command-line))))
+  (gxpkg-main (if (and (pair? args) (string=? (car args) "--"))
+                (cdr args) args)))
+SCHEME
+        fi
+        ;;
+
+    -v|--version)
+        version
+        ;;
+
+    # Build commands → pkg manager
+    build|clean|deps|install|uninstall|update|link|unlink|list|new)
+        exec scheme -q --libdirs "$ROOT:$ROOT/src" --compile-imported-libraries \
+            --program /dev/stdin -- "$CMD" "$@" <<'SCHEME'
+#!chezscheme
+(import (chezscheme) (tools pkg))
+;; Skip program name and "--" separator from command-line
+(let ((args (cdr (command-line))))
+  (gxpkg-main (if (and (pair? args) (string=? (car args) "--"))
+                (cdr args) args)))
+SCHEME
+        ;;
+
+    # pkg → forward all args to package manager
+    pkg)
+        exec scheme -q --libdirs "$ROOT:$ROOT/src" --compile-imported-libraries \
+            --program /dev/stdin -- "$@" <<'SCHEME'
+#!chezscheme
+(import (chezscheme) (tools pkg))
+;; Skip program name and "--" separator from command-line
+(let ((args (cdr (command-line))))
+  (gxpkg-main (if (and (pair? args) (string=? (car args) "--"))
+                (cdr args) args)))
+SCHEME
+        ;;
+
+    # compile → gxc
+    compile)
+        exec "$ROOT/bin/gxc" "$@"
+        ;;
+
+    # interactive → gxi
+    interactive)
+        exec "$ROOT/bin/gxi" "$@"
+        ;;
+
+    *)
+        echo "Unknown command: $CMD" >&2
+        echo "Try 'gherkin help' for usage." >&2
+        exit 1
+        ;;
+esac
