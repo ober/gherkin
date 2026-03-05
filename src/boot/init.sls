@@ -14,7 +14,8 @@
 
   (import
     (except (chezscheme) void box box? unbox set-box! thread? make-mutex mutex? mutex-name)
-    (compat gambit-compat)
+    (except (compat gambit-compat)
+      make-thread thread-start! thread-join! thread-sleep! thread-yield!)
     (compat types)
     (compat threading)
     (reader reader))

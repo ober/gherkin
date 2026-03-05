@@ -5,7 +5,8 @@ SLS_FILES = src/compat/gambit-compat.sls \
             src/compat/types.sls \
             src/compat/threading.sls \
             src/reader/reader.sls \
-            src/boot/init.sls
+            src/boot/init.sls \
+            src/boot/gherkin.sls
 
 TEST_FILES = tests/test-compat.ss \
              tests/test-types.ss \

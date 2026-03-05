@@ -1551,42 +1551,41 @@
       (else #f)))
 
   ;; --- spawn / spawn/name compilation ---
+  ;; Keep spawn as a function call — the target compat layer provides it.
+  ;; spawn already creates and starts a thread, so no need to expand to
+  ;; thread-start!/make-thread (which may not be available in all compat layers).
   (define (compile-spawn form)
-    ;; (spawn expr) → (thread-start! (make-thread (lambda () expr)))
-    ;; (spawn thunk) → (thread-start! (make-thread thunk))
-    ;; (spawn proc arg...) → (thread-start! (make-thread (lambda () (proc arg...))))
+    ;; (spawn expr) → (spawn (lambda () expr))
+    ;; (spawn thunk) → (spawn thunk)
+    ;; (spawn proc arg...) → (spawn (lambda () (proc arg...)))
     (let ((args (cdr form)))
       (if (= (length args) 1)
-        ;; Single arg: could be a thunk or expression
         (let ((arg (car args)))
           (if (and (pair? arg) (memq (car arg) '(lambda #%lambda)))
             ;; Already a lambda — use directly
-            `(thread-start! (make-thread ,(gerbil-compile-expression arg)))
+            `(spawn ,(gerbil-compile-expression arg))
             ;; Wrap in thunk
-            `(thread-start! (make-thread (lambda () ,(gerbil-compile-expression arg))))))
-        ;; Multiple args: (spawn proc arg1 arg2...) → apply
-        `(thread-start!
-           (make-thread
-             (lambda ()
-               (,(gerbil-compile-expression (car args))
-                ,@(map gerbil-compile-expression (cdr args)))))))))
+            `(spawn (lambda () ,(gerbil-compile-expression arg)))))
+        ;; Multiple args: (spawn proc arg1 arg2...) → wrap in thunk
+        `(spawn
+           (lambda ()
+             (,(gerbil-compile-expression (car args))
+              ,@(map gerbil-compile-expression (cdr args))))))))
 
   (define (compile-spawn/name form)
-    ;; (spawn/name name expr) → (thread-start! (make-thread (lambda () expr) name))
-    ;; (spawn/name name proc arg...) → (thread-start! (make-thread (lambda () (proc arg...)) name))
+    ;; spawn/name not available in all compat layers — compile as spawn
+    ;; (spawn/name name expr) → (spawn (lambda () expr))
     (let ((name (gerbil-compile-expression (cadr form)))
           (args (cddr form)))
       (if (= (length args) 1)
         (let ((arg (car args)))
           (if (and (pair? arg) (memq (car arg) '(lambda #%lambda)))
-            `(thread-start! (make-thread ,(gerbil-compile-expression arg) ,name))
-            `(thread-start! (make-thread (lambda () ,(gerbil-compile-expression arg)) ,name))))
-        `(thread-start!
-           (make-thread
-             (lambda ()
-               (,(gerbil-compile-expression (car args))
-                ,@(map gerbil-compile-expression (cdr args))))
-             ,name)))))
+            `(spawn ,(gerbil-compile-expression arg))
+            `(spawn (lambda () ,(gerbil-compile-expression arg)))))
+        `(spawn
+           (lambda ()
+             (,(gerbil-compile-expression (car args))
+              ,@(map gerbil-compile-expression (cdr args))))))))
 
   ;; --- with-lock compilation ---
   (define (compile-with-lock form)
