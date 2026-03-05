@@ -19,50 +19,29 @@
 
 (test-begin "disassemble")
 
-;; Test that disassemble-to-string returns non-empty output for a simple lambda
 (test-assert "disassemble-to-string returns string"
-  (let ((result (disassemble-to-string (lambda (x) x))))
+  (let ((result (disassemble-to-string '(lambda (x) (+ x 1)))))
     (and (string? result)
          (> (string-length result) 0))))
 
-;; Test that disassemble-to-string output contains typical asm instructions
-(test-assert "disassemble-to-string contains asm"
-  (let ((result (disassemble-to-string (lambda (x) (+ x 1)))))
-    ;; Should contain at least some hex addresses or asm mnemonics
-    (or (string-contains-ci result "ret")
+(test-assert "disassemble-to-string contains asm labels"
+  (let ((result (disassemble-to-string '(lambda (x) (+ x 1)))))
+    (or (string-contains-ci result "entry")
         (string-contains-ci result "mov")
-        (string-contains-ci result "add")
-        (> (string-length result) 10))))
+        (string-contains-ci result "jmp"))))
 
-;; Test that named procedures include their name
-(test-assert "disassemble-to-string shows name for car"
-  (let ((result (disassemble-to-string car)))
-    (string-contains-ci result "car")))
-
-;; Test that disassemble prints to stdout (non-empty)
 (test-assert "disassemble prints output"
-  (let ((output (with-output-to-string (lambda () (disassemble car)))))
-    (> (string-length output) 0)))
-
-;; Test disassemble-bytevector with known x86-64 bytes: nop + ret
-(test-assert "disassemble-bytevector nop+ret"
   (let ((output (with-output-to-string
                   (lambda ()
-                    (disassemble-bytevector
-                      (bytevector #x90 #xc3)
-                      "i386:x86-64")))))
-    (and (> (string-length output) 0)
-         (or (string-contains-ci output "nop")
-             (string-contains-ci output "ret")))))
+                    (disassemble '(lambda (x) x))))))
+    (> (string-length output) 0)))
 
-;; Test error on non-procedure
-(test-error "disassemble rejects non-procedure"
-  (disassemble 42))
-
-(test-error "disassemble-to-string rejects non-procedure"
-  (disassemble-to-string "not a proc"))
-
-(test-error "disassemble-bytevector rejects non-bytevector"
-  (disassemble-bytevector 42 "i386:x86-64"))
+(test-assert "disassemble-to-string handles if"
+  (let ((result (disassemble-to-string
+                  '(lambda (x y) (if (< x y) x y)))))
+    (and (string? result)
+         (or (string-contains-ci result "bne")
+             (string-contains-ci result "beq")
+             (string-contains-ci result "bge")))))
 
 (test-end)
