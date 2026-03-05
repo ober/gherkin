@@ -2,7 +2,7 @@
 
 ## Current Status (March 2025)
 
-**407 tests passing** across 18 test files, 0 failures in core suites.
+**645 tests passing** across 22 test files, 0 failures in core suites.
 
 | Test Suite | Tests | Status |
 |-----------|-------|--------|
@@ -16,7 +16,7 @@
 | Extended Compiler | 52 | PASS |
 | gxi | 13 | PASS |
 | Tier 1 Features | 24 | PASS |
-| Tier 2 Features | 19 | PASS (1 test-bug in check-equal? bad-math) |
+| Tier 2 Features | 19 | PASS |
 | Tier 3 Features | 15 | PASS |
 | Match & Defmethod | 26 | PASS |
 | Interface | 16 | PASS |
@@ -26,6 +26,8 @@
 | Net & Crypto | 8 | PASS |
 | HTTPD & DBI | 8 | PASS |
 | Disasm | 4 | PASS |
+| Sugar Macros | 24 | PASS |
+| Compat Modules | 56 | PASS |
 
 ---
 
@@ -65,11 +67,19 @@
 - `with-lock` (mutex-guarded execution)
 - `include` (file inlining)
 - `export #t` (re-export all)
-- Import filters (`only-in`, `except-in`, `rename-in`)
+- Import filters (`only-in`, `except-in`, `rename-in`, `prefix-in`, `group-in`)
+- Export forms (`struct-out`, `interface-out`, `rename-out`, `prefix-out`, `except-out`)
 - `receive` (values destructuring)
 - `pregexp` (regular expressions)
 - `assert`
 - `gensym`
+- `if-let` / `when-let` (conditional binding)
+- `ignore-errors` (exception suppression)
+- `with-destroy` (RAII-style cleanup)
+- `do-while` (post-test loop)
+- `values-set!` (multiple-value assignment)
+- `delay` / `force` / `lazy` (pass-through to Chez)
+- `cond-expand` (feature-based conditional compilation)
 - `read-line`, `pp`/`pretty-print`
 - `make-parameter`
 - `displayln`
@@ -119,6 +129,22 @@
 - `:std/stxutil` — via compat/std-stxutil
 - `:std/os/signal`, `:std/os/signal-handler` — via compat/signal
 - `:std/os/fdio` — via compat/fdio
+- `:std/getopt` / `:std/cli/getopt` — via compat/std-getopt (option, flag, command, argument, getopt-parse)
+- `:std/logger` — via compat/std-logger (start-logger!, errorf, warnf, infof, debugf, verbosef)
+- `:std/os/path` — via compat/std-os-path (path-expand, path-extension, path-directory, etc.)
+- `:std/os/env` — via compat/std-os-env (getenv, setenv, unsetenv)
+- `:std/srfi/13` — via compat/std-srfi-13 (30+ string operations)
+- `:std/srfi/19` — via compat/std-srfi-19 (wraps Chez SRFI-19 + date->string, time->seconds)
+- `:std/misc/repr` — via compat/std-misc-repr (repr, pr, prn)
+- `:std/misc/bytes` — via compat/std-misc-bytes (u8vector-xor, u8vector->uint, etc.)
+- `:std/text/csv` — via compat/std-text-csv (read-csv, write-csv)
+- `:std/text/utf8` — via compat/std-text-utf8 (utf8-encode, utf8-decode, utf8-length)
+- `:std/misc/process` — via compat/std-misc-process (run-process, run-process/batch)
+- `:std/text/json` — via compat/json (read-json, write-json, JSON parsing/serialization)
+- `:std/misc/alist` — via compat/std-misc-alist (agetq, aget, pget, alist-put, alist-remove)
+- `:std/misc/uuid` — via compat/std-misc-uuid (uuid-string, make-uuid)
+- `:std/misc/queue` — via compat/std-misc-queue (make-queue, enqueue!, dequeue!)
+- `:std/os/temporaries` — via compat/std-os-temporaries (make-temporary-file-name, with-temporary-file)
 
 ---
 
@@ -126,17 +152,13 @@
 
 ### 1. MISSING COMPILER FORMS
 
-#### 1a. Sugar Macros (Easy — simple expansions)
+#### 1a. Sugar Macros — ALL DONE ✓
+All sugar macros from the original gap analysis are implemented.
 
-| Form | Usage | Expansion | Est. Lines |
-|------|-------|-----------|------------|
-| `if-let` | 8 files | `(let (test expr) (if test (let (id test) then) else))` | ~15 |
-| `when-let` | 6 files | `(if-let bindings (begin body ...) (void))` | ~5 |
-| `ignore-errors` | 2 files | `(with-catch false (lambda () form ...))` | ~3 |
-| `with-destroy` | 3 files | `(let ($obj obj) (try body ... (finally {destroy $obj})))` | ~5 |
-| `do-while` | rare | Named let with test-after-body | ~10 |
-| `values-set!` | rare | `(let-values ... (set! ...) ...)` | ~10 |
-| `do` (R5RS) | rare | Named let loop (already in Chez, may need Gerbil variant) | ~10 |
+Remaining minor sugar (rare usage):
+| Form | Usage | Notes |
+|------|-------|-------|
+| `do` (R5RS) | rare | Already in Chez, Gerbil variant compiled |
 
 #### 1b. Advanced Macros (Medium)
 
@@ -148,7 +170,6 @@
 | `with-id` | 2 files | Identifier-splicing macro (compile-time) |
 | `syntax-eval` | 1 file | Compile-time eval |
 | `def/c` | 4 files | Contract-annotated definitions (from `:std/contract`) |
-| `cond-expand` | 2 files | Feature-based conditional compilation |
 
 #### 1c. Coroutine/Producer Support (Medium)
 
@@ -171,67 +192,44 @@
 
 These require a completely different approach on Chez (Chez has its own FFI). Most FFI-heavy projects (gerbil-cairo, gerbil-qt, gerbil-scintilla, gerbil-termbox, gerbil-crypto) would need per-project porting rather than compiler support.
 
-#### 1e. Lazy Evaluation (Easy)
-
-| Form | Usage | Notes |
-|------|-------|-------|
-| `delay` | 1 file | Promise creation — Chez has `delay` natively |
-| `force` | 7 files | Promise forcing — Chez has `force` natively |
-| `lazy` | rare | Lazy evaluation — may just be `delay` alias |
+#### 1e. Lazy Evaluation — DONE ✓
+`delay`/`force`/`lazy` pass through to Chez natively.
 
 ### 2. MISSING STDLIB COMPAT MODULES
 
-#### High Priority (used by 8+ project files)
+#### High Priority — Remaining (used by 8+ project files)
 
 | Module | Files | Key Functions Needed |
 |--------|-------|---------------------|
-| `:std/getopt` / `:std/cli/getopt` | 10 | `getopt`, `option`, `flag`, `command`, `argument`, `getopt-display-help` |
 | `:std/actor` | 24 | `start-actor!`, `<-`, `->`, `->>`, `-->`, `defmessage`, `defproto` |
 | `:std/event` | 13 | `sync`, `select`, `choice`, `wrap`, `handle`, `never-evt`, `always-evt` |
 | `:std/io` | 8 | New I/O subsystem (BufferedReader, BufferedWriter, etc.) |
-| `:std/logger` | 8 | `current-logger`, `debugf`, `infof`, `warnf`, `errorf` |
-| `:std/srfi/13` | 13 | String operations (many already in compat/misc) |
-| `:std/misc/process` | 9 | `run-process`, `run-process/batch` (partially in compat) |
 
-#### Medium Priority (used by 3-7 project files)
+#### Medium Priority — Remaining
 
 | Module | Files | Key Functions Needed |
 |--------|-------|---------------------|
-| `:std/srfi/19` | 6 | Date/time handling |
-| `:std/srfi/1` | 6 | List operations (partially covered by compat/misc) |
-| `:std/misc/repr` | 4 | `repr`, `display-repr`, `write-repr` |
-| `:std/misc/bytes` | 3 | `u8vector-xor`, byte manipulation |
 | `:std/misc/concurrent-plan` | 5 | DAG-based concurrent execution |
 | `:std/parser` | 5 | `deflexer`, `defparser`, token streams |
-| `:std/os/path` | 8 | `path-extension`, `path-strip-extension`, `path-directory` |
-| `:std/os/env` | 3 | `getenv`, `setenv` (Chez has these) |
-| `:std/os/temporaries` | 1 | `make-temporary-file-name` |
-| `:std/generic` | rare | Generic functions |
 | `:std/crypto` (full) | 5 | Full crypto (beyond digest — cipher, hmac, pkey, bn, dh) |
 | `:std/net/ssl` | 3 | TLS/SSL support |
 | `:std/net/uri` | rare | URI parsing |
 | `:std/net/websocket` | rare | WebSocket client/server |
-| `:std/text/csv` | 3 | CSV parsing |
-| `:std/text/utf8` | 3 | UTF-8 handling |
 
-#### Low Priority (used by 1-2 project files)
+#### Low Priority — Remaining
 
 | Module | Files | Notes |
 |--------|-------|-------|
 | `:std/db/sqlite` | 7 | Direct SQLite (DBI covers basic) |
 | `:std/db/postgresql` | 4 | PostgreSQL client |
 | `:std/db/conpool` | 3 | Connection pooling |
-| `:std/misc/alist` | rare | Alist utilities |
-| `:std/misc/queue` | rare | Queue data structure |
 | `:std/misc/deque` | rare | Double-ended queue |
 | `:std/misc/pqueue` | rare | Priority queue |
 | `:std/misc/rbtree` | rare | Red-black tree |
-| `:std/misc/uuid` | rare | UUID generation |
 | `:std/misc/barrier` | rare | Barrier synchronization |
 | `:std/misc/threads` | rare | Thread utilities |
 | `:std/misc/timeout` | rare | Timeout utilities |
 | `:std/misc/list-builder` | rare | List builder |
-| `:std/misc/number` | rare | Number utilities |
 | `:std/debug/heap` | 4 | Heap debugging |
 | `:std/debug/threads` | rare | Thread debugging |
 | `:std/text/base58` | rare | Base58 encoding |
@@ -252,24 +250,24 @@ These require a completely different approach on Chez (Chez has its own FFI). Mo
 - Manual pre-expansion of affected macros
 
 #### 3b. Module System Incompleteness
-- `group-in` import form not compiled
-- `prefix-in` import form not compiled
-- `prefix-out` / `except-out` / `rename-out` / `struct-out` export forms not compiled
-- `for-syntax` / `for-template` phase imports not compiled
+- ~~`group-in` import form not compiled~~ DONE
+- ~~`prefix-in` import form not compiled~~ DONE (was already handled)
+- ~~`prefix-out` / `except-out` / `rename-out` / `struct-out` export forms not compiled~~ DONE
+- ~~`cond-expand` / `require` feature testing~~ DONE
+- `for-syntax` / `for-template` phase imports — partially supported (for-syntax works for library compilation)
 - `defsyntax-for-import` / `defsyntax-for-export` custom import/export expanders not supported
-- No `cond-expand` / `require` feature testing
 
 #### 3c. Contract System (`:std/contract`)
 The full contract system (`definterface`, `def/c`, contract annotations, type checking) is not compiled. This is a significant subsystem used by several projects.
 
 ### 4. GAMBIT PRIMITIVES NOT YET MAPPED
 
-Most commonly-used Gambit primitives are mapped. Still missing:
+Most commonly-used Gambit primitives are mapped, including `make-will` (→ guardian), `object->u8vector`/`u8vector->object` (→ fasl-write/fasl-read).
+
+Still missing:
 
 | Gambit Function | Chez Equivalent | Usage |
 |----------------|-----------------|-------|
-| `make-will` | `guardian` | 1 file (GC weak refs) |
-| `u8vector->object` / `object->u8vector` | `fasl-write`/`fasl-read` | serialization |
 | `display-continuation-backtrace` | Chez stack trace API | error handling |
 | `bitwise-merge` | compose from and/ior/xor | rare |
 
@@ -281,30 +279,30 @@ Most commonly-used Gambit primitives are mapped. Still missing:
 
 | # | Form | Usage | Strategy | Status |
 |---|------|-------|----------|--------|
-| 1 | `if-let` | 8 files | Compile to nested let+if | TODO |
-| 2 | `when-let` | 6 files | Compile via if-let | TODO |
-| 3 | `ignore-errors` | 2 files | `(with-catch false (lambda () ...))` | TODO |
-| 4 | `with-destroy` | 3 files | try/finally expansion | TODO |
-| 5 | `do-while` | rare | Named let variant | TODO |
-| 6 | `values-set!` | rare | let-values + set! | TODO |
-| 7 | `delay`/`force`/`lazy` | 7 files | Pass through to Chez | TODO |
-| 8 | `cond-expand` | 2 files | Feature-based `if` | TODO |
+| 1 | `if-let` | 8 files | Compile to nested let+if | DONE |
+| 2 | `when-let` | 6 files | Compile via if-let | DONE |
+| 3 | `ignore-errors` | 2 files | `(with-catch false (lambda () ...))` | DONE |
+| 4 | `with-destroy` | 3 files | try/finally expansion | DONE |
+| 5 | `do-while` | rare | Named let variant | DONE |
+| 6 | `values-set!` | rare | let-values + set! | DONE |
+| 7 | `delay`/`force`/`lazy` | 7 files | Pass through to Chez | DONE |
+| 8 | `cond-expand` | 2 files | Feature-based `if` | DONE |
 
 ### Tier 2 — Compat Modules (enables more project porting)
 
-| # | Module | Usage | Strategy |
-|---|--------|-------|----------|
-| 9 | `:std/getopt` | 10 files | Chez compat shim (command-line parsing) |
-| 10 | `:std/logger` | 8 files | Simple logging to stderr |
-| 11 | `:std/os/path` | 8 files | Path manipulation (mostly string ops) |
-| 12 | `:std/os/env` | 3 files | `getenv`/`setenv` (Chez native) |
-| 13 | `:std/srfi/13` | 13 files | Extend compat/misc with more string ops |
-| 14 | `:std/srfi/19` | 6 files | Date/time (Chez has SRFI-19 via lib) |
-| 15 | `:std/misc/repr` | 4 files | Object representation printing |
-| 16 | `:std/misc/bytes` | 3 files | Byte manipulation utilities |
-| 17 | `:std/text/csv` | 3 files | CSV parser |
-| 18 | `:std/text/utf8` | 3 files | UTF-8 utilities |
-| 19 | `:std/misc/process` | 9 files | Extend run-process compat |
+| # | Module | Usage | Strategy | Status |
+|---|--------|-------|----------|--------|
+| 9 | `:std/getopt` | 10 files | Chez compat shim (command-line parsing) | DONE |
+| 10 | `:std/logger` | 8 files | Simple logging to stderr | DONE |
+| 11 | `:std/os/path` | 8 files | Path manipulation (mostly string ops) | DONE |
+| 12 | `:std/os/env` | 3 files | `getenv`/`setenv` (Chez native) | DONE |
+| 13 | `:std/srfi/13` | 13 files | Extend compat/misc with more string ops | DONE |
+| 14 | `:std/srfi/19` | 6 files | Date/time (Chez has SRFI-19 via lib) | DONE |
+| 15 | `:std/misc/repr` | 4 files | Object representation printing | DONE |
+| 16 | `:std/misc/bytes` | 3 files | Byte manipulation utilities | DONE |
+| 17 | `:std/text/csv` | 3 files | CSV parser | DONE |
+| 18 | `:std/text/utf8` | 3 files | UTF-8 utilities | DONE |
+| 19 | `:std/misc/process` | 9 files | Extend run-process compat | DONE |
 
 ### Tier 3 — Major Subsystems (enables specific project categories)
 
@@ -329,7 +327,7 @@ Most commonly-used Gambit primitives are mapped. Still missing:
 | 31 | `:std/db/postgresql` | PostgreSQL wire protocol |
 | 32 | `:std/db/conpool` | Connection pooling |
 | 33 | Macro expansion phase | Gerbil expander on Chez |
-| 34 | Module system completeness | group-in, phase imports, etc. |
+| 34 | Module system completeness | phase imports, defsyntax-for-import/export |
 | 35 | FFI bridge | Gambit FFI → Chez FFI translation |
 
 ---
@@ -343,18 +341,13 @@ Most commonly-used Gambit primitives are mapped. Still missing:
 | gerbil-svg | None | Pure string/list/XML operations |
 | gerbil-utils | None | Basic utilities |
 | gerbil-graphviz | Minimal | DOT generation |
-
-### Nearly Ready (need Tier 1-2 items)
-
-| Project | Missing | Priority Items Needed |
-|---------|---------|----------------------|
-| gerbil-coreutils | getopt | #9 |
-| gerbil-gawk | getopt, misc | #9, #19 |
-| gerbil-llm | if-let, logger | #1, #10 |
-| gerbil-jira | net/request, json (done), getopt | #9 |
-| gerbil-gitlab | net/request, json, getopt | #9 |
-| gerbil-swagger | json, text | #17 |
-| gerbil-auth | crypto/digest (done), base64 (done) | Ready? |
+| gerbil-coreutils | None | getopt now available |
+| gerbil-gawk | None | getopt + misc/process now available |
+| gerbil-llm | None | if-let + logger now available |
+| gerbil-jira | None | net/request + json + getopt all available |
+| gerbil-gitlab | None | net/request + json + getopt all available |
+| gerbil-swagger | None | json + text/csv now available |
+| gerbil-auth | None | crypto/digest + base64 already available |
 
 ### Need Tier 3 Work
 
@@ -432,3 +425,5 @@ Most commonly-used Gambit primitives are mapped. Still missing:
 - `tests/test-net-crypto.ss` — Net & Crypto (8 tests)
 - `tests/test-httpd-dbi.ss` — HTTPD & DBI (8 tests)
 - `tests/test-disasm.ss` — Disassembly (4 tests)
+- `tests/test-sugar.ss` — Sugar macros: if-let, when-let, ignore-errors, etc. (24 tests)
+- `tests/test-compat-modules.ss` — Compat modules: getopt, logger, srfi-13, etc. (56 tests)

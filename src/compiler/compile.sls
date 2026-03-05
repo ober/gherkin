@@ -502,6 +502,30 @@
             (compile-object->u8vector expr))
            ((eq? head 'u8vector->object)
             (compile-u8vector->object expr))
+           ;; if-let
+           ((eq? head 'if-let)
+            (compile-if-let expr))
+           ;; when-let
+           ((eq? head 'when-let)
+            (compile-when-let expr))
+           ;; ignore-errors
+           ((eq? head 'ignore-errors)
+            (compile-ignore-errors expr))
+           ;; with-destroy
+           ((eq? head 'with-destroy)
+            (compile-with-destroy expr))
+           ;; do-while
+           ((eq? head 'do-while)
+            (compile-do-while expr))
+           ;; values-set!
+           ((eq? head 'values-set!)
+            (compile-values-set! expr))
+           ;; delay / force / lazy — pass through to Chez
+           ((memq head '(delay force lazy))
+            `(,head ,@(map gerbil-compile-expression (cdr expr))))
+           ;; cond-expand
+           ((eq? head 'cond-expand)
+            (compile-cond-expand expr))
            ;; default: function application
            (else
             (map gerbil-compile-expression expr)))))))
@@ -1426,6 +1450,100 @@
                    `(and ,test (begin ,@(map gerbil-compile-expression body)))
                    `(and ,test ,(lp rest)))))))))))
 
+  ;; --- if-let compilation ---
+  (define (compile-if-let form)
+    ;; (if-let (var expr) then else) → (let ((var expr)) (if var then else))
+    ;; (if-let (var expr) then) → (let ((var expr)) (if var then (void)))
+    (let* ((binding (cadr form))
+           (var (car binding))
+           (init (gerbil-compile-expression (cadr binding)))
+           (then (gerbil-compile-expression (caddr form)))
+           (else-expr (if (null? (cdddr form))
+                        '(void)
+                        (gerbil-compile-expression (cadddr form)))))
+      `(let ((,var ,init))
+         (if ,var ,then ,else-expr))))
+
+  ;; --- when-let compilation ---
+  (define (compile-when-let form)
+    ;; (when-let (var expr) body...) → (let ((var expr)) (when var body...))
+    (let* ((binding (cadr form))
+           (var (car binding))
+           (init (gerbil-compile-expression (cadr binding)))
+           (body (map gerbil-compile-expression (cddr form))))
+      `(let ((,var ,init))
+         (when ,var ,@body))))
+
+  ;; --- ignore-errors compilation ---
+  (define (compile-ignore-errors form)
+    ;; (ignore-errors body...) → (guard (__exn (#t #f)) body...)
+    (let ((body (map gerbil-compile-expression (cdr form))))
+      `(guard (__exn (#t #f)) ,@body)))
+
+  ;; --- with-destroy compilation ---
+  (define (compile-with-destroy form)
+    ;; (with-destroy obj body...) → (let (($obj obj)) (dynamic-wind (lambda () #f) (lambda () body...) (lambda () (call-method $obj 'destroy))))
+    (let ((obj (gerbil-compile-expression (cadr form)))
+          (body (map gerbil-compile-expression (cddr form)))
+          (tmp (gensym "$obj")))
+      `(let ((,tmp ,obj))
+         (dynamic-wind
+           (lambda () #f)
+           (lambda () ,@body)
+           (lambda () (call-method ,tmp 'destroy))))))
+
+  ;; --- do-while compilation ---
+  (define (compile-do-while form)
+    ;; (do-while (test) body...) → (let loop () body... (when test (loop)))
+    (let ((test (gerbil-compile-expression (cadr form)))
+          (body (map gerbil-compile-expression (cddr form)))
+          (loop (gensym "loop")))
+      `(let ,loop ()
+         ,@body
+         (when ,test (,loop)))))
+
+  ;; --- values-set! compilation ---
+  (define (compile-values-set! form)
+    ;; (values-set! (var1 var2 ...) expr) → (let-values (((tmp1 tmp2 ...) expr)) (set! var1 tmp1) ...)
+    (let* ((vars (cadr form))
+           (expr (gerbil-compile-expression (caddr form)))
+           (tmps (map (lambda (v) (gensym (symbol->string v))) vars)))
+      `(let-values (((,@tmps) ,expr))
+         ,@(map (lambda (var tmp) `(set! ,var ,tmp)) vars tmps))))
+
+  ;; --- cond-expand compilation ---
+  (define (compile-cond-expand form)
+    ;; (cond-expand (feature body...) ... (else body...))
+    ;; For Chez/Gherkin, we support: chez-scheme, gherkin, r6rs, else
+    ;; Unsupported features (gambit, etc.) are false
+    (let lp ((clauses (cdr form)))
+      (cond
+        ((null? clauses)
+         '(void))
+        (else
+         (let* ((clause (car clauses))
+                (feature (car clause))
+                (body (cdr clause)))
+           (cond
+             ((eq? feature 'else)
+              `(begin ,@(map gerbil-compile-expression body)))
+             ((cond-expand-feature? feature)
+              `(begin ,@(map gerbil-compile-expression body)))
+             (else
+              (lp (cdr clauses)))))))))
+
+  (define (cond-expand-feature? feature)
+    (cond
+      ((symbol? feature)
+       (memq feature '(chez-scheme gherkin r6rs)))
+      ((and (pair? feature) (eq? (car feature) 'and))
+       (for-all cond-expand-feature? (cdr feature)))
+      ((and (pair? feature) (eq? (car feature) 'or))
+       (exists cond-expand-feature? (cdr feature)))
+      ((and (pair? feature) (eq? (car feature) 'not))
+       (not (cond-expand-feature? (cadr feature))))
+      (else #f)))
+
   ;; --- spawn / spawn/name compilation ---
   (define (compile-spawn form)
     ;; (spawn expr) → (thread-start! (make-thread (lambda () expr)))
@@ -2190,15 +2308,16 @@
           (lambda (form)
             (cond
               ((and (pair? form) (eq? (car form) 'import))
-               ;; Scan import specs for (for-syntax ...) wrappers
+               ;; Expand group-in, then scan for (for-syntax ...) wrappers
                (for-each
                  (lambda (spec)
                    (if (and (pair? spec) (eq? (car spec) 'for-syntax))
                      ;; (for-syntax :std/stxutil) → collect the inner module specs
                      (set! for-syntax-imports
-                       (append for-syntax-imports (cdr spec)))
+                       (append for-syntax-imports
+                               (expand-group-in (cdr spec))))
                      (set! imports (append imports (list spec)))))
-                 (cdr form)))
+                 (expand-group-in (cdr form))))
               ((and (pair? form) (eq? (car form) 'export))
                (set! exports (append exports (cdr form))))
               ((and (pair? form) (memq (car form) '(prelude: package: namespace:)))
@@ -2309,6 +2428,29 @@
                                        (string-prefix? (string-append prefix "-") s))))
                                all-names)))
                 (lp (cdr exps) (append (reverse iface-names) result))))
+             ;; (rename-out (old new) ...) → (rename (old new) ...)
+             ((and (pair? (car exps)) (eq? (caar exps) 'rename-out))
+              (lp (cdr exps)
+                  (cons `(rename ,@(cdar exps)) result)))
+             ;; (prefix-out pfx sym ...) → export prefixed symbols
+             ((and (pair? (car exps)) (eq? (caar exps) 'prefix-out))
+              (let ((pfx (symbol->string (cadar exps)))
+                    (syms (cddar exps)))
+                (lp (cdr exps)
+                    (append (reverse
+                              (map (lambda (s)
+                                     (string->symbol
+                                       (string-append pfx (symbol->string s))))
+                                   syms))
+                            result))))
+             ;; (except-out sym ...) → export all except listed
+             ((and (pair? (car exps)) (eq? (caar exps) 'except-out))
+              (let ((excluded (cdar exps)))
+                (lp (cdr exps)
+                    (append (reverse
+                              (filter (lambda (n) (not (memq n excluded)))
+                                      all-names))
+                            result))))
              ((symbol? (car exps))
               (lp (cdr exps) (cons (car exps) result)))
              (else
@@ -2379,6 +2521,26 @@
       (:std/os/signal-handler . (compat signal-handler))
       (:std/os/fdio     . (compat fdio))
       (:std/srfi/1      . (compat misc))
+      (:std/getopt      . (compat std-getopt))
+      (:std/cli/getopt  . (compat std-getopt))
+      (:std/logger      . (compat std-logger))
+      (:std/os/path     . (compat std-os-path))
+      (:std/os/env      . (compat std-os-env))
+      (:std/os/temporaries . (compat std-os-env))
+      (:std/srfi/13     . (compat std-srfi-13))
+      (:std/srfi/19     . (compat std-srfi-19))
+      (:std/misc/repr   . (compat std-misc-repr))
+      (:std/misc/bytes  . (compat std-misc-bytes))
+      (:std/text/csv    . (compat std-text-csv))
+      (:std/text/utf8   . (compat std-text-utf8))
+      (:std/misc/process . (compat std-misc-process))
+      (:std/misc/alist  . (compat std-misc-alist))
+      (:std/misc/uuid   . (compat std-misc-uuid))
+      (:std/misc/queue  . (compat std-misc-queue))
+      (:std/os/temporaries . (compat std-os-temporaries))
+      (:std/misc/number . #f)  ;; stripped — use Chez native number ops
+      (:std/misc/list-builder . #f)  ;; stripped
+      (:std/generic     . #f)  ;; stripped
       (:std/foreign     . #f)  ;; stripped
       (:gerbil/runtime  . #f)  ;; stripped
       ))
@@ -2406,7 +2568,7 @@
            (effective-map (append import-map *default-import-map*))
            ;; Extract library names already covered by base imports
            (base-libs (map import-spec-library-name base-imports)))
-      (let lp ((imports imports) (result '()) (seen '()))
+      (let lp ((imports (expand-group-in imports)) (result '()) (seen '()))
         (if (null? imports)
           (reverse result)
           (let ((resolved (resolve-import (car imports) effective-map source-dir)))
@@ -2418,6 +2580,26 @@
               (lp (cdr imports)
                   (cons resolved result)
                   (cons resolved seen))))))))
+
+  ;; Expand (group-in base sub1 sub2 ...) → (base/sub1 base/sub2 ...)
+  ;; e.g. (group-in :std/misc string list hash) → (:std/misc/string :std/misc/list :std/misc/hash)
+  (define (expand-group-in imports)
+    (let lp ((imports imports) (result '()))
+      (if (null? imports)
+        (reverse result)
+        (let ((imp (car imports)))
+          (if (and (pair? imp) (eq? (car imp) 'group-in))
+            ;; Expand group-in: (group-in base sub1 sub2 ...)
+            (let ((base (symbol->string (cadr imp)))
+                  (subs (cddr imp)))
+              (lp (cdr imports)
+                  (append (reverse
+                            (map (lambda (sub)
+                                   (string->symbol
+                                     (string-append base "/" (symbol->string sub))))
+                                 subs))
+                          result)))
+            (lp (cdr imports) (cons imp result)))))))
 
   ;; Strip relative path prefixes (./ and ../) and normalize to a base module name.
   ;; Converts path separators to hyphens for flat R6RS library names.
