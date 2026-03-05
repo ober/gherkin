@@ -27,7 +27,8 @@
           gerbil-read gerbil-read-file
           annotated-datum? annotated-datum-value)
     (compiler compile)
-    (boot init))
+    (boot init)
+    (compat std-disasm))
 
   ;; --- Import resolution for script/REPL mode ---
   ;; Resolve Gerbil-style imports (:std/sugar etc.) to Chez library names
@@ -96,6 +97,10 @@
          (define make-f64vector make-flvector)
          (define f64vector-ref flvector-ref)
          (define f64vector-set! flvector-set!))
+      repl-env)
+    ;; Make disassemble available in the REPL
+    (chez:eval
+      '(import (compat std-disasm))
       repl-env))
 
   (define (gxi-start args)
@@ -205,6 +210,8 @@
                    (printf "~n--- Chez optimized ---~n")
                    (parameterize ([print-gensym #f])
                      (pretty-print optimized))
+                   (printf "~n--- Assembly ---~n")
+                   (disassemble compiled)
                    (newline)))))))
         (else
          (printf "Unknown command: ,~a~n" cmd)
@@ -216,7 +223,7 @@
     (printf "  ,h ,help     Show this help~n")
     (printf "  ,load <file> Load and eval a Gerbil file~n")
     (printf "  ,expand <form> Show compiled output~n")
-    (printf "  ,dis <form>   Show compiled + optimized output~n"))
+    (printf "  ,dis <form>   Show compiled + optimized + assembly output~n"))
 
   (define (eval-and-print form)
     (guard (exn (#t (display-error "error" exn)))
