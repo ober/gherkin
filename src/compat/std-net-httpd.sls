@@ -1,6 +1,7 @@
 #!chezscheme
 ;;; std-net-httpd.sls -- Compat shim for Gerbil's :std/net/httpd
-;;; Minimal HTTP server using Chez TCP sockets
+;;; Delegates to chez-httpd (native threaded HTTP server) when available,
+;;; falls back to minimal stub implementation.
 
 (library (compat std-net-httpd)
   (export
@@ -12,7 +13,32 @@
 
   (import (chezscheme))
 
-  ;; --- Request record ---
+  ;; Try to load chez-httpd at init time
+  (define *use-chez-httpd* #f)
+  (define chez-httpd-start #f)
+  (define chez-httpd-stop #f)
+  (define chez-httpd-route #f)
+  (define chez-http-respond #f)
+  (define chez-http-req-method #f)
+  (define chez-http-req-path #f)
+  (define chez-http-req-headers #f)
+  (define chez-http-req-body #f)
+
+  (define dummy-init
+    (guard (e [#t #f])
+      (eval '(import (chez-httpd)))
+      (set! *use-chez-httpd* #t)
+      (set! chez-httpd-start (eval 'httpd-start))
+      (set! chez-httpd-stop (eval 'httpd-stop))
+      (set! chez-httpd-route (eval 'httpd-route))
+      (set! chez-http-respond (eval 'http-respond))
+      (set! chez-http-req-method (eval 'http-req-method))
+      (set! chez-http-req-path (eval 'http-req-path))
+      (set! chez-http-req-headers (eval 'http-req-headers))
+      (set! chez-http-req-body (eval 'http-req-body))
+      #t))
+
+  ;; --- Request record (fallback) ---
   (define-record-type http-request
     (fields method url path params headers (mutable body-data))
     (protocol
@@ -21,25 +47,34 @@
           (new method url path params headers #f)))))
 
   (define (http-request-body req)
-    (http-request-body-data req))
+    (if *use-chez-httpd*
+      (chez-http-req-body req)
+      (http-request-body-data req)))
 
-  ;; --- Response record ---
+  ;; --- Response record (fallback) ---
   (define-record-type http-response
     (fields port)
     (protocol
       (lambda (new) (lambda (port) (new port)))))
 
-  ;; --- Server state ---
+  ;; --- Server state (fallback) ---
   (define *server-handlers* '())
   (define *server-running* #f)
-  (define *server-listener* #f)
+  (define *server-handle* #f)
   (define *server-port* 8080)
 
   (define (http-register-handler server path handler . rest)
-    (set! *server-handlers*
-      (cons (cons path handler) *server-handlers*)))
+    (if *use-chez-httpd*
+      ;; Register with chez-httpd router, wrapping handler to bridge APIs
+      (chez-httpd-route path
+        (lambda (req writer)
+          (let ((wrapped-req req)
+                (wrapped-res writer))
+            (handler wrapped-req wrapped-res))))
+      (set! *server-handlers*
+        (cons (cons path handler) *server-handlers*))))
 
-  ;; --- HTTP parsing ---
+  ;; --- HTTP parsing (fallback) ---
 
   (define (parse-request port)
     (let ((line (get-line port)))
@@ -79,29 +114,32 @@
   ;; --- Response writing ---
 
   (define (http-response-write res status headers body)
-    (let ((port (http-response-port res)))
-      ;; Status line
-      (format port "HTTP/1.1 ~a ~a\r\n" status (status-text status))
-      ;; Headers
-      (when headers
-        (for-each (lambda (h)
-                    (format port "~a: ~a\r\n" (car h) (cdr h)))
-                  headers))
-      ;; Content-Length
-      (let ((body-bytes (cond
-                          ((string? body) (string->utf8 body))
-                          ((bytevector? body) body)
-                          (else (bytevector)))))
-        (format port "Content-Length: ~a\r\n" (bytevector-length body-bytes))
-        (format port "\r\n")
-        (flush-output-port port)
-        ;; Write body bytes
-        (let ((bp (transcoded-port-binary-port port)))
-          (put-bytevector bp body-bytes)
-          (flush-output-port bp)))))
+    (if *use-chez-httpd*
+      ;; Delegate to chez-httpd writer
+      (chez-http-respond res status
+        (if headers
+          (map (lambda (h) (cons (car h) (cdr h))) headers)
+          '())
+        body)
+      ;; Fallback: write to port
+      (let ((port (http-response-port res)))
+        (format port "HTTP/1.1 ~a ~a\r\n" status (status-text status))
+        (when headers
+          (for-each (lambda (h)
+                      (format port "~a: ~a\r\n" (car h) (cdr h)))
+                    headers))
+        (let ((body-bytes (cond
+                            ((string? body) (string->utf8 body))
+                            ((bytevector? body) body)
+                            (else (bytevector)))))
+          (format port "Content-Length: ~a\r\n" (bytevector-length body-bytes))
+          (format port "\r\n")
+          (flush-output-port port)
+          (let ((bp (transcoded-port-binary-port port)))
+            (put-bytevector bp body-bytes)
+            (flush-output-port bp))))))
 
   (define (transcoded-port-binary-port tp)
-    ;; Try to get binary port; if not possible, write as string
     tp)
 
   (define (status-text code)
@@ -120,11 +158,8 @@
       (else "Unknown")))
 
   ;; --- Server ---
-  ;; Note: Chez Scheme doesn't have built-in TCP server sockets.
-  ;; This implementation uses a subprocess approach with socat/netcat.
 
   (define (start-http-server! . args)
-    ;; Parse keyword arguments
     (let ((port 8080))
       (let lp ((rest args))
         (cond
@@ -145,15 +180,17 @@
           (else (lp (cdr rest)))))
       (set! *server-running* #t)
       (set! *server-port* port)
-      ;; Return server info - actual serving requires TCP socket library
-      (list 'http-server port)))
+      (if *use-chez-httpd*
+        (begin
+          (set! *server-handle* (chez-httpd-start port))
+          *server-handle*)
+        (list 'http-server port))))
 
   (define (find-handler path)
     (let lp ((handlers *server-handlers*))
       (cond
         ((null? handlers) #f)
         ((string=? (caar handlers) path) (cdar handlers))
-        ;; Check prefix match for wildcard paths
         ((and (> (string-length (caar handlers)) 0)
               (char=? (string-ref (caar handlers)
                                   (- (string-length (caar handlers)) 1))
@@ -170,7 +207,9 @@
 
   (define (stop-http-server! . args)
     (set! *server-running* #f)
-    (set! *server-listener* #f))
+    (when (and *use-chez-httpd* *server-handle*)
+      (chez-httpd-stop *server-handle*)
+      (set! *server-handle* #f)))
 
   ;; --- Helpers ---
 

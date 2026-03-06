@@ -1,6 +1,7 @@
 #!chezscheme
 ;;; std-net-request.sls -- Compat shim for Gerbil's :std/net/request
-;;; HTTP client using curl subprocess
+;;; Delegates to chez-https (native TLS HTTP client) when available,
+;;; falls back to curl subprocess.
 
 (library (compat std-net-request)
   (export
@@ -12,6 +13,37 @@
 
   (import (chezscheme))
 
+  ;; Try to load chez-https; if unavailable, use curl fallback
+  (define *use-chez-https* #f)
+  (define chez-http-get #f)
+  (define chez-http-post #f)
+  (define chez-http-put #f)
+  (define chez-http-delete #f)
+  (define chez-http-head #f)
+  (define chez-request-status #f)
+  (define chez-request-text #f)
+  (define chez-request-content #f)
+  (define chez-request-headers #f)
+  (define chez-request-close #f)
+
+  (define dummy-init
+    (guard (e [#t #f])
+      (eval '(import (chez-https)))
+      (set! *use-chez-https* #t)
+      (set! chez-http-get (eval 'http-get))
+      (set! chez-http-post (eval 'http-post))
+      (set! chez-http-put (eval 'http-put))
+      (set! chez-http-delete (eval 'http-delete))
+      (set! chez-http-head (eval 'http-head))
+      (set! chez-request-status (eval 'request-status))
+      (set! chez-request-text (eval 'request-text))
+      (set! chez-request-content (eval 'request-content))
+      (set! chez-request-headers (eval 'request-headers))
+      (set! chez-request-close (eval 'request-close))
+      #t))
+
+  ;; --- Request record (used by curl fallback and as wrapper for chez-https) ---
+
   (define-record-type request
     (fields url
             (mutable status)
@@ -19,33 +51,98 @@
             (mutable headers)
             (mutable body)       ;; bytevector
             (mutable encoding)
-            (mutable closed?))
+            (mutable closed?)
+            (mutable native-req)) ;; chez-https result when available
     (protocol
       (lambda (new)
         (lambda (url)
-          (new url 0 "" '() (bytevector) 'utf-8 #f)))))
+          (new url 0 "" '() (bytevector) 'utf-8 #f #f)))))
 
   (define (request-content req)
-    (request-body req))
+    (if (request-native-req req)
+      (chez-request-content (request-native-req req))
+      (request-body req)))
 
   (define (request-text req)
-    (utf8->string (request-body req)))
+    (if (request-native-req req)
+      (chez-request-text (request-native-req req))
+      (utf8->string (request-body req))))
 
   (define (request-json req)
-    ;; Return the text; caller should parse JSON
-    (utf8->string (request-body req)))
+    (request-text req))
 
   (define (request-close req)
-    (request-closed?-set! req #t))
+    (if (request-native-req req)
+      (chez-request-close (request-native-req req))
+      (request-closed?-set! req #t)))
 
   (define (request-response-bytes req)
     (unless (= (request-status req) 200)
       (error 'request-response-bytes
              "HTTP error" (request-status req) (request-status-text req)))
-    (request-close req)
-    (request-body req))
+    (let ((body (request-content req)))
+      (request-close req)
+      body))
 
-  ;; --- URL encoding ---
+  ;; --- Keyword argument conversion ---
+  ;; Gerbil uses headers: params: data: etc.
+  ;; chez-https uses headers: params: data:
+
+  (define (convert-kwargs kwargs)
+    ;; Filter out kwargs that chez-https doesn't support
+    (let lp ((kw kwargs) (result '()))
+      (if (null? kw) (reverse result)
+        (if (pair? (cdr kw))
+          (case (car kw)
+            ((headers: params: data:)
+             (lp (cddr kw) (cons (cadr kw) (cons (car kw) result))))
+            ((redirect: cookies: auth: ssl-context: timeout:)
+             (lp (cddr kw) result))  ;; skip unsupported
+            (else (lp (cddr kw) result)))
+          (reverse result)))))
+
+  ;; --- Dispatch: chez-https or curl ---
+
+  (define (wrap-native-result url native-req)
+    (let ((req (make-request url)))
+      (request-native-req-set! req native-req)
+      (request-status-set! req (chez-request-status native-req))
+      (request-status-text-set! req "")
+      (let ((hdrs (chez-request-headers native-req)))
+        (request-headers-set! req (if (list? hdrs) hdrs '())))
+      req))
+
+  (define (http-get url . kwargs)
+    (if *use-chez-https*
+      (wrap-native-result url (apply chez-http-get url (convert-kwargs kwargs)))
+      (apply curl-request 'GET url kwargs)))
+
+  (define (http-post url . kwargs)
+    (if *use-chez-https*
+      (wrap-native-result url (apply chez-http-post url (convert-kwargs kwargs)))
+      (apply curl-request 'POST url kwargs)))
+
+  (define (http-put url . kwargs)
+    (if *use-chez-https*
+      (wrap-native-result url (apply chez-http-put url (convert-kwargs kwargs)))
+      (apply curl-request 'PUT url kwargs)))
+
+  (define (http-delete url . kwargs)
+    (if *use-chez-https*
+      (wrap-native-result url (apply chez-http-delete url (convert-kwargs kwargs)))
+      (apply curl-request 'DELETE url kwargs)))
+
+  (define (http-head url . kwargs)
+    (if *use-chez-https*
+      (wrap-native-result url (apply chez-http-head url (convert-kwargs kwargs)))
+      (apply curl-request 'HEAD url kwargs)))
+
+  (define (http-options url . kwargs)
+    (apply curl-request 'OPTIONS url kwargs))
+
+  ;; ===================================================================
+  ;; Curl fallback (original implementation)
+  ;; ===================================================================
 
   (define (url-encode-pair key val)
     (string-append (url-encode (if (symbol? key) (symbol->string key)
@@ -68,8 +165,6 @@
                  (format port "%~2,'0x" (bytevector-u8-ref bv i)))))))
         str)
       (get-output-string port)))
-
-  ;; --- Build curl command ---
 
   (define (build-url url params)
     (if (and params (pair? params))
@@ -95,15 +190,13 @@
   (define (build-curl-args method url headers data header-file)
     (let ((args (list "curl" "-s" "-S"
                       "-X" (symbol->string method)
-                      "-D" header-file  ;; dump headers to file
+                      "-D" header-file
                       url)))
-      ;; Add headers
       (when (and headers (pair? headers))
         (for-each (lambda (h)
                     (set! args (append args
                       (list "-H" (string-append (car h) ": " (cdr h))))))
                   headers))
-      ;; Add data
       (when data
         (set! args (append args
           (list "--data-binary" (if (bytevector? data)
@@ -111,10 +204,7 @@
                                   data)))))
       args))
 
-  ;; --- Execute HTTP request via curl ---
-
-  (define (http-request method url . kwargs)
-    ;; Parse keyword args
+  (define (curl-request method url . kwargs)
     (let ((headers #f)
           (params #f)
           (data #f)
@@ -131,18 +221,16 @@
               ((redirect:) (set! redirect (cadr kw)))
               ((cookies:) (set! cookies (cadr kw)))
               ((auth:) (set! auth (cadr kw)))
-              ((ssl-context: timeout:) #f))  ;; ignored
+              ((ssl-context: timeout:) #f))
             (lp (cddr kw)))))
 
       (let* ((full-url (build-url url params))
              (req (make-request full-url))
              (header-file (format "/tmp/gherkin-curl-hdr-~a" (random 10000000)))
              (curl-args (build-curl-args method full-url headers data header-file))
-             ;; Add redirect flag
              (curl-args (if redirect
                           (append curl-args '("-L"))
                           curl-args))
-             ;; Add cookies
              (curl-args (if (and cookies (pair? cookies))
                           (append curl-args
                             (list "-H"
@@ -154,18 +242,15 @@
                                       (caar cs) "=" (cdar cs)
                                       (lp (cdr cs) #f)))))))
                           curl-args))
-             ;; Add auth
              (curl-args (if auth
                           (append curl-args (list "-u" (format "~a:~a"
                                                         (cadr auth) (caddr auth))))
                           curl-args)))
 
-        ;; Execute curl: body to stdout file, headers to separate file
         (let* ((tmp-body (format "/tmp/gherkin-curl-body-~a" (random 10000000)))
                (cmd (string-append (string-join curl-args " ")
                                    " > " (shell-escape tmp-body) " 2>/dev/null")))
           (system cmd)
-          ;; Read headers
           (let ((header-text (if (file-exists? header-file)
                                (let ((p (open-input-file header-file)))
                                  (let ((t (get-string-all p)))
@@ -180,7 +265,6 @@
                                  (delete-file tmp-body)
                                  t))
                              "")))
-            ;; Parse headers and set body
             (parse-curl-headers req header-text)
             (request-body-set! req (string->utf8 body-text))
             req)))))
@@ -201,7 +285,6 @@
             (lp (+ i 1) (append '(#\' #\\ #\' #\') result))
             (lp (+ i 1) (cons c result)))))) "'"))
 
-  ;; Parse curl header file output
   (define (parse-curl-headers req header-text)
     (let* ((lines (string-split-lines header-text))
            (headers '())
@@ -212,7 +295,6 @@
           (cond
             ((and (> (string-length line) 4)
                   (string=? "HTTP" (substring line 0 4)))
-             ;; Status line: HTTP/1.1 200 OK
              (let ((parts (string-split-space line)))
                (when (>= (length parts) 2)
                  (set! status (or (string->number (cadr parts)) 0))
@@ -226,7 +308,6 @@
                                (string-append r " " (car ps))))))
                      "")))))
             ((> (string-length line) 0)
-             ;; Header line: Key: Value
              (let ((colon-pos (string-index line #\:)))
                (when colon-pos
                  (set! headers
@@ -240,7 +321,6 @@
       (request-status-text-set! req status-text)
       (request-headers-set! req (reverse headers))))
 
-  ;; Helper functions
   (define (string-split-lines str)
     (let lp ((i 0) (start 0) (result '()))
       (cond
@@ -287,25 +367,5 @@
                           (not (char-whitespace? (string-ref str i))))
                     (+ i 1) (lp (- i 1))))))
       (substring str start end)))
-
-  ;; --- Public API ---
-
-  (define (http-get url . kwargs)
-    (apply http-request 'GET url kwargs))
-
-  (define (http-post url . kwargs)
-    (apply http-request 'POST url kwargs))
-
-  (define (http-put url . kwargs)
-    (apply http-request 'PUT url kwargs))
-
-  (define (http-delete url . kwargs)
-    (apply http-request 'DELETE url kwargs))
-
-  (define (http-head url . kwargs)
-    (apply http-request 'HEAD url kwargs))
-
-  (define (http-options url . kwargs)
-    (apply http-request 'OPTIONS url kwargs))
 
   ) ;; end library
