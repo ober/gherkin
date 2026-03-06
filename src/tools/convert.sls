@@ -105,6 +105,56 @@
         (mkdir path))))
 
   ;; ========================================
+  ;; Module name utilities
+  ;; ========================================
+
+  ;; Convert a module path to a flat name: "ec2/api" -> "ec2-api", "creds" -> "creds"
+  (define (mod->flat-name mod)
+    (let ((parts (string-split-char mod #\/)))
+      (if (= (length parts) 1) mod (string-join parts "-"))))
+
+  ;; Scan a submodule directory for internal cross-module dependencies.
+  ;; Returns an alist: ((mod-path . (dep-path ...)) ...)
+  ;; where mod-path and dep-path are relative paths without .ss extension.
+  (define (scan-internal-deps submod-dir pkg-name modules)
+    (let ((pkg-prefix (string-append ":" pkg-name "/")))
+      (map
+        (lambda (mod)
+          (let* ((source-path (path-expand (string-append mod ".ss") submod-dir))
+                 (deps
+                   (if (file-exists? source-path)
+                     (guard (e (#t '()))
+                       (let ((forms (read-forms-from-file source-path)))
+                         (let lp ((forms forms) (deps '()))
+                           (if (null? forms) (reverse deps)
+                             (let ((form (car forms)))
+                               (if (and (pair? form) (eq? (car form) 'import))
+                                 (lp (cdr forms)
+                                     (append
+                                       (let inner ((imps (cdr form)) (found '()))
+                                         (if (null? imps) (reverse found)
+                                           (let* ((imp (car imps))
+                                                  (s (cond
+                                                       ((symbol? imp) (symbol->string imp))
+                                                       ((and (pair? imp)
+                                                             (memq (car imp) '(only-in except-in))
+                                                             (symbol? (cadr imp)))
+                                                        (symbol->string (cadr imp)))
+                                                       (else ""))))
+                                             (if (string-prefix? pkg-prefix s)
+                                               (let ((dep (substring s (string-length pkg-prefix)
+                                                                     (string-length s))))
+                                                 (if (member dep modules)
+                                                   (inner (cdr imps) (cons dep found))
+                                                   (inner (cdr imps) found)))
+                                               (inner (cdr imps) found)))))
+                                       deps))
+                                 (lp (cdr forms) deps)))))))
+                     '())))
+            (cons mod deps)))
+        modules)))
+
+  ;; ========================================
   ;; Shell commands
   ;; ========================================
 
@@ -319,36 +369,42 @@
   ;; ========================================
 
   ;; Scan all .ss files in a directory tree for (import ...) forms
-  ;; Returns a deduplicated list of :std/* imports as symbols
-  (define (scan-imports dir)
-    (let ((imports (make-hashtable equal-hash equal?)))
-      (let walk ((d dir))
-        (when (file-exists? d)
-          (for-each
-            (lambda (f)
-              (let ((path (path-expand f d)))
-                (cond
-                  ((and (not (string-prefix? "." f))
-                        (file-directory? path))
-                   (walk path))
-                  ((string-suffix? ".ss" f)
-                   (guard (e (#t #f))
-                     (let ((forms (read-forms-from-file path)))
-                       (for-each
-                         (lambda (form)
-                           (when (and (pair? form) (eq? (car form) 'import))
-                             (for-each
-                               (lambda (imp)
-                                 (when (symbol? imp)
-                                   (let ((s (symbol->string imp)))
-                                     (when (string-prefix? ":std/" s)
-                                       (hashtable-set! imports imp #t))
-                                     (when (string-prefix? ":gerbil/" s)
-                                       (hashtable-set! imports imp #t)))))
-                               (cdr form))))
-                         forms)))))))
-            (directory-list d))))
-      (vector->list (hashtable-keys imports))))
+  ;; Returns a deduplicated list of :std/*, :gerbil/*, and :pkg/* imports as symbols
+  (define scan-imports
+    (case-lambda
+      ((dir) (scan-imports dir #f))
+      ((dir pkg-name)
+       (let ((imports (make-hashtable equal-hash equal?))
+             (pkg-prefix (if pkg-name (string-append ":" pkg-name "/") #f)))
+         (let walk ((d dir))
+           (when (file-exists? d)
+             (for-each
+               (lambda (f)
+                 (let ((path (path-expand f d)))
+                   (cond
+                     ((and (not (string-prefix? "." f))
+                           (file-directory? path))
+                      (walk path))
+                     ((string-suffix? ".ss" f)
+                      (guard (e (#t #f))
+                        (let ((forms (read-forms-from-file path)))
+                          (for-each
+                            (lambda (form)
+                              (when (and (pair? form) (eq? (car form) 'import))
+                                (for-each
+                                  (lambda (imp)
+                                    (when (symbol? imp)
+                                      (let ((s (symbol->string imp)))
+                                        (when (string-prefix? ":std/" s)
+                                          (hashtable-set! imports imp #t))
+                                        (when (string-prefix? ":gerbil/" s)
+                                          (hashtable-set! imports imp #t))
+                                        (when (and pkg-prefix (string-prefix? pkg-prefix s))
+                                          (hashtable-set! imports imp #t)))))
+                                  (cdr form))))
+                            forms)))))))
+               (directory-list d))))
+         (vector->list (hashtable-keys imports))))))
 
   ;; ========================================
   ;; Determine needed compat modules from imports
@@ -386,52 +442,64 @@
 
   ;; Generate the import map entries based on detected imports
   (define (generate-import-map imports pkg-name)
-    (let ((entries '()))
-      ;; Standard library mappings — always include the basics
-      (set! entries (append entries
-        '((:std/sugar        . (compat sugar))
-          (:std/format       . (compat format))
-          (:std/sort         . (compat sort))
-          (:std/misc/string  . (compat misc))
-          (:std/misc/list    . (compat misc))
-          (:std/misc/path    . (compat misc))
-          (:std/misc/hash    . (compat misc))
-          (:std/iter         . #f)
-          (:std/error        . (runtime error))
-          (:std/srfi/1       . (compat misc))
-          (:std/foreign      . #f)
-          (:std/build-script . #f)
-          (:std/test         . #f)
-          ;; Gerbil runtime — always strip
-          (:gerbil/core      . #f)
-          (:gerbil/runtime   . #f)
-          (:gerbil/runtime/init . #f)
-          (:gerbil/runtime/loader . #f)
-          (:gerbil/expander   . #f)
-          (:gerbil/compiler   . #f))))
-      ;; Conditional imports based on what the project actually uses
-      (for-each
-        (lambda (imp)
-          (let ((s (if (symbol? imp) (symbol->string imp) "")))
-            (cond
-              ((string=? s ":std/pregexp")
-               (set! entries (cons '(:std/pregexp . (compat pregexp)) entries)))
-              ((string=? s ":std/os/signal")
-               (set! entries (cons '(:std/os/signal . (compat signal)) entries)))
-              ((string=? s ":std/os/signal-handler")
-               (set! entries (cons '(:std/os/signal-handler . (compat signal-handler)) entries)))
-              ((string=? s ":std/os/fdio")
-               (set! entries (cons '(:std/os/fdio . (compat fdio)) entries)))
-              ((string=? s ":std/text/json")
-               (set! entries (cons '(:std/text/json . (compat json)) entries)))
-              ((string=? s ":std/cli/getopt")
-               (set! entries (cons '(:std/cli/getopt . (compat getopt)) entries)))
-              ((string=? s ":std/misc/process")
-               (set! entries (cons '(:std/misc/process . (compat process)) entries)))
-              ((string=? s ":std/misc/ports")
-               (set! entries (cons `(:std/misc/ports . (,pkg-name compat)) entries))))))
-        imports)
-      (reverse entries)))
+    (let ((pkg-sym (if (symbol? pkg-name) pkg-name (string->symbol pkg-name))))
+      (let ((entries '()))
+        ;; Standard library mappings — always include the basics
+        (set! entries (append entries
+          '((:std/sugar        . (compat sugar))
+            (:std/format       . (compat format))
+            (:std/sort         . (compat sort))
+            (:std/misc/string  . (compat misc))
+            (:std/misc/list    . (compat misc))
+            (:std/misc/path    . (compat misc))
+            (:std/misc/hash    . (compat misc))
+            (:std/iter         . #f)
+            (:std/error        . (runtime error))
+            (:std/srfi/1       . (compat misc))
+            (:std/foreign      . #f)
+            (:std/build-script . #f)
+            (:std/test         . #f)
+            ;; Gerbil runtime — always strip
+            (:gerbil/core      . #f)
+            (:gerbil/runtime   . #f)
+            (:gerbil/runtime/init . #f)
+            (:gerbil/runtime/loader . #f)
+            (:gerbil/expander   . #f)
+            (:gerbil/compiler   . #f))))
+        ;; Conditional imports based on what the project actually uses
+        (for-each
+          (lambda (imp)
+            (let ((s (if (symbol? imp) (symbol->string imp) "")))
+              (let ((pkg-prefix (string-append ":" (if (symbol? pkg-name) (symbol->string pkg-name) pkg-name) "/")))
+                (cond
+                  ;; Internal cross-module references: :pkg-name/mod/path -> (pkg-sym flat-name)
+                  ((string-prefix? pkg-prefix s)
+                   (let* ((mod-path (substring s (string-length pkg-prefix) (string-length s)))
+                          (flat (string->symbol (mod->flat-name mod-path))))
+                     (set! entries (cons (cons (string->symbol s) (list pkg-sym flat)) entries))))
+                  ((string=? s ":std/pregexp")
+                   (set! entries (cons '(:std/pregexp . (compat pregexp)) entries)))
+                  ((string=? s ":std/os/signal")
+                   (set! entries (cons '(:std/os/signal . (compat signal)) entries)))
+                  ((string=? s ":std/os/signal-handler")
+                   (set! entries (cons '(:std/os/signal-handler . (compat signal-handler)) entries)))
+                  ((string=? s ":std/os/fdio")
+                   (set! entries (cons '(:std/os/fdio . (compat fdio)) entries)))
+                  ((string=? s ":std/text/json")
+                   (set! entries (cons '(:std/text/json . (compat json)) entries)))
+                  ((string=? s ":std/cli/getopt")
+                   (set! entries (cons '(:std/cli/getopt . (compat getopt)) entries)))
+                  ((string=? s ":std/misc/process")
+                   (set! entries (cons '(:std/misc/process . (compat process)) entries)))
+                  ((string=? s ":std/misc/ports")
+                   (set! entries (cons `(:std/misc/ports . (,pkg-sym compat)) entries)))
+                  ;; Map any other :std/* to #f (skip) — avoids compile errors for unmapped imports
+                  ;; But only if not already in the base entries
+                  ((and (string-prefix? ":std/" s)
+                        (not (assq (string->symbol s) entries)))
+                   (set! entries (cons (cons (string->symbol s) #f) entries)))))))
+          imports)
+        (reverse entries))))
 
   ;; ========================================
   ;; File generation
@@ -679,18 +747,18 @@
       (fprintf p "  (quotient (file-length (open-file-input-port \"~a\")) 1024))~n" binary-name)
       (get-output-string p)))
 
-  ;; Generate build-gherkin.ss
-  (define (gen-build-gherkin submodule-name pkg-sym modules import-map-entries compat-modules)
+  ;; Generate compile-one.ss (single-module compiler, used with --program for parallel builds)
+  (define (gen-compile-one submodule-name pkg-sym modules import-map-entries compat-modules)
     (let ((p (open-output-string)))
       (display "#!chezscheme\n" p)
-      (fprintf p ";;; build-gherkin.ss — Compile ~a .ss modules to .sls via Gherkin compiler~n" submodule-name)
-      (display ";;; Usage: scheme -q --libdirs src:<gherkin-path> --compile-imported-libraries < build-gherkin.ss\n\n" p)
+      (fprintf p ";;; compile-one.ss — Compile a single ~a module to .sls via Gherkin compiler~n" submodule-name)
+      (display ";;; Usage: scheme -q --libdirs src:<gherkin-path> --compile-imported-libraries --program compile-one.ss <source-path> <flat-name>\n\n" p)
 
-      ;; Imports
+      ;; Imports — keep 'error' available for the build script itself
       (display "(import\n  (except (chezscheme) void box box? unbox set-box!\n" p)
       (display "          andmap ormap iota last-pair find\n" p)
       (display "          1+ 1- fx/ fx1+ fx1-\n" p)
-      (display "          error error? raise with-exception-handler identifier?\n" p)
+      (display "          error? raise with-exception-handler identifier?\n" p)
       (display "          hash-table? make-hash-table)\n  (compiler compile))\n\n" p)
 
       ;; Config
@@ -873,19 +941,20 @@
       (display "     (get-import-lib-name (cadr spec)))\n" p)
       (display "    ((and (pair? spec) (symbol? (car spec))) spec)\n    (else #f)))\n\n" p)
 
-      ;; compile-module
+      ;; compile-module — exit 1 on error for Make integration
       (display ";; --- Module compilation ---\n" p)
       (display "(define (compile-module source-path flat-name)\n" p)
       (display "  (let* ((input-path (find-source source-path))\n" p)
       (fprintf p "         (output-path (string-append output-dir \"/\" flat-name \".sls\"))~n")
       (fprintf p "         (lib-name `(~a ,(string->symbol flat-name))))~n" pkg-sym)
-      (display "    (display (string-append \"  Compiling: \" input-path \" → \" flat-name \".sls\\n\"))\n" p)
+      (display "    (display (string-append \"  Compiling: \" input-path \" -> \" flat-name \".sls\\n\"))\n" p)
       (display "    (guard (exn\n" p)
       (display "             (#t (display (string-append \"  ERROR: \" input-path \" failed: \"))\n" p)
       (display "                 (display (condition-message exn))\n" p)
       (display "                 (when (irritants-condition? exn)\n" p)
-      (display "                   (display \" — \") (display (condition-irritants exn)))\n" p)
-      (display "                 (newline) #f))\n" p)
+      (display "                   (display \" -- \") (display (condition-irritants exn)))\n" p)
+      (display "                 (newline)\n" p)
+      (display "                 (exit 1)))\n" p)
       (display "      (let* ((lib-form (gerbil-compile-to-library\n" p)
       (fprintf p "                         input-path lib-name ~a-import-map ~a-base-imports))~n" pkg-sym pkg-sym)
       (display "             (lib-form (fix-import-conflicts lib-form)))\n" p)
@@ -894,55 +963,59 @@
       (display "            (display \"#!chezscheme\\n\" port)\n" p)
       (display "            (parameterize ([print-gensym #f])\n" p)
       (display "              (pretty-print lib-form port)))\n          'replace)\n" p)
-      (display "        (display (string-append \"  OK: \" output-path \"\\n\")) #t))))\n\n" p)
+      (display "        (display (string-append \"  OK: \" output-path \"\\n\"))))))\n\n" p)
 
-      ;; Main build sequence
-      (fprintf p "(display \"=== Gherkin ~a Builder ===\\n\\n\")~n~n" (string-upcase (symbol->string pkg-sym)))
-      ;; Simple tiered build — just compile all modules in order
-      (display "(display \"--- Compiling modules ---\\n\")\n" p)
-      (for-each
-        (lambda (mod)
-          ;; Figure out the source path and flat name
-          ;; If the module has a / in it, it's nested like "lsp/handlers/sync"
-          ;; Otherwise it's just "ast"
-          (let* ((parts (string-split-char mod #\/))
-                 ;; Flat name: join with - (e.g. "lsp/handlers/sync" → "handlers-sync")
-                 ;; But for single-part modules it's just the name
-                 (flat-name (if (= (length parts) 1)
-                              mod
-                              (string-join (cdr parts) "-")))
-                 (source-path (string-append mod ".ss")))
-            (fprintf p "(compile-module \"~a\" \"~a\")~n" source-path flat-name)))
-        modules)
-      (display "\n(display \"\\n=== Build complete ===\\n\")\n" p)
+      ;; Entry point — parse command-line args
+      (display ";; --- Entry point ---\n" p)
+      (display "(let ((args (cdr (command-line))))\n" p)
+      (display "  (unless (= (length args) 2)\n" p)
+      (display "    (display \"Usage: scheme --program compile-one.ss <source-path> <flat-name>\\n\")\n" p)
+      (display "    (exit 1))\n" p)
+      (display "  (compile-module (car args) (cadr args)))\n" p)
       (get-output-string p)))
 
   ;; Generate Makefile
-  (define (gen-makefile entry-ss binary-name has-ffi?)
+  ;; Generate Makefile with per-module parallel targets
+  ;; dep-alist: ((mod-path . (dep-path ...)) ...) from scan-internal-deps
+  (define (gen-makefile entry-ss binary-name has-ffi? modules dep-alist pkg-sym)
     (let ((p (open-output-string)))
       (display "SCHEME = $(HOME)/.local/bin/scheme\n" p)
       (display "GHERKIN = $(or $(GHERKIN_DIR),$(HOME)/mine/gherkin/src)\n" p)
       (display "LIBDIRS = src:$(GHERKIN)\n" p)
-      (display "COMPILE = $(SCHEME) -q --libdirs $(LIBDIRS) --compile-imported-libraries\n\n" p)
+      (display "COMPILE = $(SCHEME) -q --libdirs $(LIBDIRS) --compile-imported-libraries\n" p)
+      (display "COMPILE_ONE = $(COMPILE) --program compile-one.ss\n\n" p)
+      (fprintf p "O = src/~a~n~n" pkg-sym)
 
+      ;; ALL_SLS variable
+      (display "ALL_SLS = \\\n" p)
+      (let lp ((mods modules) (first? #t))
+        (unless (null? mods)
+          (let ((flat (mod->flat-name (car mods))))
+            (unless first? (display " \\\n" p))
+            (fprintf p "  $O/~a.sls" flat))
+          (lp (cdr mods) #f)))
+      (display "\n\n" p)
+
+      ;; Phony targets
       (if has-ffi?
         (begin
           (display ".PHONY: all compile gherkin ffi binary clean help run\n\n" p)
           (display "all: ffi gherkin compile\n\n" p)
-          (display "# Step 1: Compile C FFI shim\n" p)
+          (display "# Compile C FFI shim\n" p)
           (fprintf p "ffi: lib~a-ffi.so~n" binary-name)
           (fprintf p "lib~a-ffi.so: ffi-shim.c~n" binary-name)
-          (display "\tgcc -shared -fPIC -o $@ $< -Wall -Wextra -O2\n\n" p)
-          (display "# Step 2: Translate .ss → .sls via gherkin compiler\n" p)
-          (display "gherkin: ffi\n" p))
+          (display "\tgcc -shared -fPIC -o $@ $< -Wall -Wextra -O2\n\n" p))
         (begin
           (display ".PHONY: all compile gherkin binary clean help run\n\n" p)
-          (display "all: gherkin compile\n\n" p)
-          (display "# Step 1: Translate .ss → .sls via gherkin compiler\n" p)
-          (display "gherkin:\n" p)))
-      (display "\t$(COMPILE) < build-gherkin.ss\n\n" p)
+          (display "all: gherkin compile\n\n" p)))
 
-      (display "# Step 2: Compile .sls → .so via Chez\n" p)
+      ;; gherkin target depends on all .sls files (use make -j8 for parallel)
+      (display "# Translate .ss -> .sls via gherkin compiler (use make -j8 gherkin)\n" p)
+      (if has-ffi?
+        (display "gherkin: ffi $(ALL_SLS)\n\n" p)
+        (display "gherkin: $(ALL_SLS)\n\n" p))
+
+      (display "# Compile .sls -> .so via Chez\n" p)
       (display "compile: gherkin\n\t$(COMPILE) < build-all.ss\n\n" p)
 
       (display "# Build = full pipeline\nbuild: binary\n\n" p)
@@ -962,18 +1035,35 @@
                binary-name binary-name
                (path-strip-extension entry-ss) (path-strip-extension entry-ss))
       (display "\trm -f petite.boot scheme.boot\n" p)
-      (display "\tfind src -name '*.so' -o -name '*.wpo' | xargs rm -f 2>/dev/null || true\n\n" p)
+      (display "\tfind src -name '*.so' -o -name '*.wpo' | xargs rm -f 2>/dev/null || true\n" p)
+      (display "\trm -f $(ALL_SLS)\n\n" p)
 
       (display "help:\n" p)
       (display "\t@echo \"Targets:\"\n" p)
-      (display "\t@echo \"  all       - Translate .ss→.sls + compile .sls→.so\"\n" p)
-      (fprintf p "\t@echo \"  build     - Build standalone binary (./~a)\"~n" binary-name)
-      (display "\t@echo \"  binary    - Same as build\"\n" p)
-      (display "\t@echo \"  run       - Run interpreted\"\n" p)
-      (display "\t@echo \"  gherkin   - Translate .ss → .sls only\"\n" p)
-      (display "\t@echo \"  compile   - Compile .sls → .so only\"\n" p)
-      (display "\t@echo \"  clean     - Remove all build artifacts\"\n" p)
-      (display "\t@echo \"  help      - Show this help\"\n" p)
+      (display "\t@echo \"  all          - Translate .ss->.sls + compile .sls->.so\"\n" p)
+      (fprintf p "\t@echo \"  build        - Build standalone binary (./~a)\"~n" binary-name)
+      (display "\t@echo \"  binary       - Same as build\"\n" p)
+      (display "\t@echo \"  run          - Run interpreted\"\n" p)
+      (display "\t@echo \"  gherkin      - Translate .ss -> .sls (use -j8 for parallel)\"\n" p)
+      (display "\t@echo \"  compile      - Compile .sls -> .so only\"\n" p)
+      (display "\t@echo \"  clean        - Remove all build artifacts\"\n" p)
+      (display "\t@echo \"  help         - Show this help\"\n\n" p)
+
+      ;; Per-module targets with dependency tracking
+      (display "# --- Per-module gherkin translation targets ---\n" p)
+      (for-each
+        (lambda (mod)
+          (let* ((flat (mod->flat-name mod))
+                 (source-path (string-append mod ".ss"))
+                 (entry (assoc mod dep-alist))
+                 (deps (if entry (cdr entry) '()))
+                 (dep-sls (map (lambda (d) (format "$O/~a.sls" (mod->flat-name d))) deps)))
+            (if (null? dep-sls)
+              (fprintf p "$O/~a.sls: compile-one.ss~n" flat)
+              (fprintf p "$O/~a.sls: ~a~n" flat (string-join dep-sls " ")))
+            (fprintf p "\t-@$(COMPILE_ONE) ~a ~a~n~n" source-path flat)))
+        modules)
+
       (get-output-string p)))
 
   ;; ========================================
@@ -1055,10 +1145,10 @@
                                (let ((parts (string-split-char exe-module #\/)))
                                  (if (= (length parts) 1)
                                    (string->symbol exe-module)
-                                   (string->symbol (string-join (cdr parts) "-"))))
+                                   (string->symbol (string-join parts "-"))))
                                'main))
                    ;; Scan imports
-                   (imports (scan-imports submod-dir))
+                   (imports (scan-imports submod-dir pkg-str))
                    (compat-needs (determine-compat-needs imports))
                    (import-map (generate-import-map imports pkg-sym))
                    ;; Entry point filename
@@ -1069,7 +1159,9 @@
                    ;; Check if project uses FFI
                    (has-ffi? (file-exists? (path-expand "ffi-shim.c" submod-dir)))
                    ;; Filter compat modules (exclude 'types' — that's a gherkin runtime module)
-                   (compat-modules (filter (lambda (s) (not (eq? s 'types))) compat-needs)))
+                   (compat-modules (filter (lambda (s) (not (eq? s 'types))) compat-needs))
+                   ;; Scan internal cross-module dependencies
+                   (dep-alist (scan-internal-deps submod-dir pkg-str modules)))
 
               (printf "~n  Package: ~a~n" pkg-str)
               (printf "  Modules: ~a~n" (length modules))
@@ -1088,27 +1180,19 @@
               ;; .gitignore
               (write-file (path-expand ".gitignore" project-dir)
                 (gen-gitignore project-dir binary-name
-                  (map (lambda (mod)
-                         (let ((parts (string-split-char mod #\/)))
-                           (if (= (length parts) 1) mod
-                             (string-join (cdr parts) "-"))))
-                       modules)
+                  (map mod->flat-name modules)
                   pkg-str))
               (printf "    .gitignore~n")
 
-              ;; build-gherkin.ss
-              (write-file (path-expand "build-gherkin.ss" project-dir)
-                (gen-build-gherkin repo-name pkg-sym modules import-map compat-modules))
-              (printf "    build-gherkin.ss~n")
+              ;; compile-one.ss (single-module compiler for parallel builds)
+              (write-file (path-expand "compile-one.ss" project-dir)
+                (gen-compile-one repo-name pkg-sym modules import-map compat-modules))
+              (printf "    compile-one.ss~n")
 
               ;; build-all.ss
               (write-file (path-expand "build-all.ss" project-dir)
                 (gen-build-all
-                  (map (lambda (mod)
-                         (let ((parts (string-split-char mod #\/)))
-                           (if (= (length parts) 1) mod
-                             (string-join (cdr parts) "-"))))
-                       modules)
+                  (map mod->flat-name modules)
                   pkg-sym))
               (printf "    build-all.ss~n")
 
@@ -1125,17 +1209,13 @@
               ;; build-binary.ss
               (write-file (path-expand "build-binary.ss" project-dir)
                 (gen-build-binary entry-ss binary-name
-                  (map (lambda (mod)
-                         (let ((parts (string-split-char mod #\/)))
-                           (if (= (length parts) 1) mod
-                             (string-join (cdr parts) "-"))))
-                       modules)
+                  (map mod->flat-name modules)
                   compat-modules pkg-str))
               (printf "    build-binary.ss~n")
 
-              ;; Makefile
+              ;; Makefile (with per-module parallel targets)
               (write-file (path-expand "Makefile" project-dir)
-                (gen-makefile entry-ss binary-name has-ffi?))
+                (gen-makefile entry-ss binary-name has-ffi? modules dep-alist pkg-sym))
               (printf "    Makefile~n")
 
               ;; Compat module placeholders
@@ -1168,7 +1248,7 @@
               (printf "  2. Populate src/compat/*.sls with Gambit/Gerbil compat shims~n")
               (printf "     (copy from gherkin-shell or gherkin-lsp and customize)~n")
               (printf "  3. Review build-gherkin.ss import maps and adjust as needed~n")
-              (printf "  4. make all           # translate + compile~n")
+              (printf "  4. make -j8 all       # translate + compile (parallel)~n")
               (printf "  5. make build         # build standalone binary~n")))))))))
 
   ) ;; end library
