@@ -21,6 +21,14 @@ compile:
 	@echo "Compiling Gherkin libraries..."
 	@$(SCHEME) -q $(SCHEMEFLAGS) --program tests/compile-libs.ss
 
+compile-opt3:
+	@echo "Compiling Gherkin libraries (optimize-level 3, tuned cp0)..."
+	@$(SCHEME) -q --libdirs .:src --script tests/compile-libs-opt3.ss
+
+compile-wpo:
+	@echo "Compiling Gherkin libraries (with WPO files)..."
+	@$(SCHEME) -q $(SCHEMEFLAGS) -e '(generate-wpo-files #t)' --program tests/compile-libs.ss
+
 test: compile
 	@echo "Running tests..."
 	@$(SCHEME) -q $(SCHEMEFLAGS) --program tests/run-all.ss
