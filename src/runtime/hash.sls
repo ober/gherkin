@@ -88,7 +88,30 @@
       (() (wrap-hash-table (make-hashtable equal-hash equal?) 'equal))
       ((size-hint) (wrap-hash-table (make-hashtable equal-hash equal?
                                       (if (fixnum? size-hint) size-hint 16))
-                                    'equal))))
+                                    'equal))
+      ;; Gerbil keyword convention: (make-hash-table 'test: equal?)
+      ((key val . rest)
+       (let loop ((args (cons key (cons val rest)))
+                  (test #f) (size #f))
+         (cond
+           ((null? args)
+            (let ((kind (cond
+                          ((or (not test) (eq? test equal?)) 'equal)
+                          ((eq? test eq?) 'gc)
+                          ((eq? test eqv?) 'eqv)
+                          ((eq? test string=?) 'string)
+                          (else 'equal)))
+                  (sz (or size 16)))
+              (case kind
+                ((gc) (wrap-hash-table (make-gc-table sz) 'gc))
+                ((eqv) (wrap-hash-table (make-eqv-table sz) 'eqv))
+                ((string) (wrap-hash-table (make-string-table sz) 'string))
+                (else (wrap-hash-table (make-hashtable equal-hash equal? sz) 'equal)))))
+           ((and (pair? (cdr args)) (eq? (car args) 'test:))
+            (loop (cddr args) (cadr args) size))
+           ((and (pair? (cdr args)) (eq? (car args) 'size:))
+            (loop (cddr args) test (cadr args)))
+           (else (loop (cdr args) test size)))))))
 
   ;; make-hash-table-eq uses eq? comparison (fast for symbols)
   (define make-hash-table-eq

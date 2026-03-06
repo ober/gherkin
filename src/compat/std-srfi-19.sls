@@ -25,9 +25,13 @@
     time->seconds
     seconds->time
     time-difference
-    add-duration)
+    add-duration
+    time-utc
+    make-time)
 
   (import (chezscheme))
+
+  (define time-utc 'time-utc)
 
   ;; All these are already provided by Chez:
   ;; current-date, current-time, time?, date?, make-date,

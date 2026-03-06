@@ -19,7 +19,8 @@
     rest-arguments
     call-with-getopt)
 
-  (import (except (chezscheme) filter find))
+  (import (except (chezscheme) filter find make-hash-table)
+          (only (runtime hash) make-hash-table hash-put!))
 
   ;; --- Option/Flag/Argument/Command records ---
 
@@ -44,29 +45,24 @@
 
   (define (option name . args)
     ;; (option "name" "-s" "--long" help: "..." default: val)
-    (let-values (((short long help default)
-                  (parse-opt-args args)))
-      (make-opt name short long help default #f 'option)))
+    (let ((parsed (parse-opt-args args)))
+      (make-opt name (car parsed) (cadr parsed) (caddr parsed) (cadddr parsed) #f 'option)))
 
   (define (flag name . args)
-    (let-values (((short long help default)
-                  (parse-opt-args args)))
-      (make-opt name short long help (or default #f) #f 'flag)))
+    (let ((parsed (parse-opt-args args)))
+      (make-opt name (car parsed) (cadr parsed) (caddr parsed) (or (cadddr parsed) #f) #f 'flag)))
 
   (define (argument name . args)
-    (let-values (((short long help default)
-                  (parse-opt-args args)))
-      (make-opt name #f #f (or help "") default #f 'argument)))
+    (let ((parsed (parse-opt-args args)))
+      (make-opt name #f #f (or (caddr parsed) "") (cadddr parsed) #f 'argument)))
 
   (define (optional-argument name . args)
-    (let-values (((short long help default)
-                  (parse-opt-args args)))
-      (make-opt name #f #f (or help "") default #f 'optional-argument)))
+    (let ((parsed (parse-opt-args args)))
+      (make-opt name #f #f (or (caddr parsed) "") (cadddr parsed) #f 'optional-argument)))
 
   (define (rest-arguments name . args)
-    (let-values (((short long help default)
-                  (parse-opt-args args)))
-      (make-opt name #f #f (or help "") (or default '()) #f 'rest-arguments)))
+    (let ((parsed (parse-opt-args args)))
+      (make-opt name #f #f (or (caddr parsed) "") (or (cadddr parsed) '()) #f 'rest-arguments)))
 
   (define (command name . args)
     ;; (command name help: "..." opts... handler)
@@ -89,7 +85,7 @@
     (let lp ((args args) (short #f) (long #f) (help #f) (default #f))
       (cond
         ((null? args)
-         (values short long help default))
+         (list short long help default))
         ((and (string? (car args)) (> (string-length (car args)) 0)
               (char=? (string-ref (car args) 0) #\-))
          (if (and (> (string-length (car args)) 1)
@@ -199,7 +195,11 @@
           opts))
 
   (define (find-cmd cmds name)
-    (find (lambda (c) (string=? name (cmd-name c))) cmds))
+    (let ((name-str (if (symbol? name) (symbol->string name) name)))
+      (find (lambda (c)
+              (let ((cn (cmd-name c)))
+                (string=? name-str (if (symbol? cn) (symbol->string cn) cn))))
+            cmds)))
 
   ;; --- getopt-display-help ---
   (define (getopt-display-help gopt . rest)
@@ -245,13 +245,23 @@
 
   ;; --- call-with-getopt ---
   (define (call-with-getopt proc args . specs)
-    ;; (call-with-getopt proc args option ... flag ... program: "name")
+    ;; Gerbil convention: (proc cmd opt-hash)
+    ;; cmd = command name symbol, opt-hash = hash table of options
     (let ((gopt (apply getopt specs)))
       (guard (exn (#t (fprintf (current-error-port) "Error: ~a~n" exn)
                       (getopt-display-help gopt (current-error-port))
                       (exit 1)))
         (let-values (((opts rest) (getopt-parse gopt args)))
-          (proc opts rest)))))
+          (let ((cmd-pair (assoc "command" opts))
+                (ht (make-hash-table)))
+            (for-each (lambda (pair)
+                        (unless (string=? "command" (let ((k (car pair)))
+                                                      (if (symbol? k) (symbol->string k) k)))
+                          (hash-put! ht (car pair) (cdr pair))))
+                      opts)
+            (if cmd-pair
+              (proc (cdr cmd-pair) ht)
+              (proc #f ht)))))))
 
   ;; Helpers
   (define (find pred lst)
