@@ -704,7 +704,7 @@
                   ((string=? s ":std/misc/rwlock")
                    (set! entries (cons '(:std/misc/rwlock . (compat std-misc-rwlock)) entries)))
                   ((string=? s ":std/misc/wg")
-                   (set! entries (cons '(:std/misc/wg . (compat std-misc-wg)) entries)))
+                   (set! entries (cons '(:std/misc/wg . (compat wg)) entries)))
                   ;; Values, assert, lazy, coroutine
                   ((string=? s ":std/values")
                    (set! entries (cons '(:std/values . (compat std-values)) entries)))
