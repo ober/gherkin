@@ -770,12 +770,25 @@
     ;; No direct equivalent; sleep briefly
     (sleep (make-time 'time-duration 0 0)))
 
-  ;;;; SMP stubs
-  ;;;; Chez Scheme doesn't have Gambit's SMP threading model.
-  ;;;; These are no-ops so that Gambit SMP code compiles and runs single-threaded.
+  ;;;; SMP support
+  ;;;; Chez Scheme has full SMP with pthreads — expose real CPU count
+  ;;;; and let callers scale parallelism accordingly.
+
+  ;; Cache the CPU count at load time (reading /proc is cheap but no need to repeat)
+  (define *cpu-count*
+    (guard (exn [#t 1])
+      (let ([p (open-input-file "/proc/cpuinfo")])
+        (let loop ([count 0])
+          (let ([line (get-line p)])
+            (if (eof-object? line)
+              (begin (close-input-port p) (max 1 count))
+              (loop (if (and (>= (string-length line) 9)
+                             (string=? (substring line 0 9) "processor"))
+                     (+ count 1) count))))))))
+
   (define (|##set-parallelism-level!| n) (void))
   (define (|##startup-parallelism!|) (void))
-  (define (|##current-vm-processor-count|) 1)
+  (define (|##current-vm-processor-count|) *cpu-count*)
 
   ;;;; Process statistics
   ;;;; Gambit's ##process-statistics returns an f64vector:

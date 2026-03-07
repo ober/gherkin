@@ -88,35 +88,25 @@
   (define (thread-specific t) (gerbil-thread-specific t))
   (define (thread-specific-set! t v) (gerbil-thread-specific-set! t v))
 
-  ;; Map from Chez thread-id → gerbil-thread for current-thread lookup
-  (define thread-map (make-eq-hashtable))
-  (define thread-map-lock (chez:make-mutex))
-
-  ;; The main thread's gerbil-thread object
+  ;; Thread-local storage for current gerbil-thread (no global lock!)
+  ;; make-thread-parameter is Chez's SMP-safe thread-local mechanism.
   (define main-thread
     (let ([t (make-thread (lambda () (void)) 'main)])
       (gerbil-thread-chez-tid-set! t (get-thread-id))
-      (mutex-acquire thread-map-lock)
-      (hashtable-set! thread-map (get-thread-id) t)
-      (mutex-release thread-map-lock)
       t))
 
+  (define current-gerbil-thread (make-thread-parameter main-thread))
+
   (define (current-thread)
-    (mutex-acquire thread-map-lock)
-    (let ([t (hashtable-ref thread-map (get-thread-id) #f)])
-      (mutex-release thread-map-lock)
-      (or t main-thread)))
+    (current-gerbil-thread))
 
   (define (thread-start! t)
     (let ([thunk (gerbil-thread-thunk t)])
       (fork-thread
         (lambda ()
-          ;; Register this thread
-          (let ([tid (get-thread-id)])
-            (gerbil-thread-chez-tid-set! t tid)
-            (mutex-acquire thread-map-lock)
-            (hashtable-set! thread-map tid t)
-            (mutex-release thread-map-lock))
+          ;; Set thread-local identity (no global lock needed)
+          (gerbil-thread-chez-tid-set! t (get-thread-id))
+          (current-gerbil-thread t)
           ;; Run the thunk
           (guard (exn
                   [#t
@@ -124,21 +114,13 @@
                    (gerbil-thread-done?-set! t #t)
                    (mutex-acquire (gerbil-thread-done-mutex t))
                    (condition-broadcast (gerbil-thread-done-cond t))
-                   (mutex-release (gerbil-thread-done-mutex t))
-                   ;; Unregister
-                   (mutex-acquire thread-map-lock)
-                   (hashtable-delete! thread-map (get-thread-id))
-                   (mutex-release thread-map-lock)])
+                   (mutex-release (gerbil-thread-done-mutex t))])
             (let ([result (thunk)])
               (gerbil-thread-result-set! t result)
               (gerbil-thread-done?-set! t #t)
               (mutex-acquire (gerbil-thread-done-mutex t))
               (condition-broadcast (gerbil-thread-done-cond t))
-              (mutex-release (gerbil-thread-done-mutex t))
-              ;; Unregister
-              (mutex-acquire thread-map-lock)
-              (hashtable-delete! thread-map (get-thread-id))
-              (mutex-release thread-map-lock))))))
+              (mutex-release (gerbil-thread-done-mutex t)))))))
     t)
 
   (define (thread-join! t . timeout)

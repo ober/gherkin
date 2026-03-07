@@ -85,7 +85,17 @@
       '(begin
          (define (|##set-parallelism-level!| n) (void))
          (define (|##startup-parallelism!|) (void))
-         (define (|##current-vm-processor-count|) 1)
+         (define *repl-cpu-count*
+           (guard (exn [#t 1])
+             (let ([p (open-input-file "/proc/cpuinfo")])
+               (let loop ([count 0])
+                 (let ([line (get-line p)])
+                   (if (eof-object? line)
+                     (begin (close-input-port p) (max 1 count))
+                     (loop (if (and (>= (string-length line) 9)
+                                    (string=? (substring line 0 9) "processor"))
+                            (+ count 1) count))))))))
+         (define (|##current-vm-processor-count|) *repl-cpu-count*)
          (define (|##process-statistics|)
            ;; Return f64vector matching Gambit layout:
            ;; 0=user-time 1=sys-time 2=real-time 3=gc-user 4=gc-real 5=gc-count

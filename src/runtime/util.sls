@@ -497,10 +497,21 @@
       (if thunk (thunk) (values))))
 
   ;; --- SMP locks ---
-  ;; Using Chez mutexes for thread safety
-  (define (make-spinlock) (make-mutex))
-  (define (spinlock-acquire! mx) (mutex-acquire mx))
-  (define (spinlock-release! mx) (mutex-release mx))
+  ;; True spinlocks using Chez native box-cas! for short critical sections.
+  ;; Much lighter than pthread mutexes for SMP hot paths.
+  ;; We use chez:box/chez:box-cas! to get Chez's native atomic boxes,
+  ;; since gambit-compat redefines box with its own record type.
+  (define chez:box (let () (import (only (chezscheme) box)) box))
+  (define chez:box-cas! (let () (import (only (chezscheme) box-cas!)) box-cas!))
+  (define chez:set-box! (let () (import (only (chezscheme) set-box!)) set-box!))
+
+  (define (make-spinlock) (chez:box #f))
+  (define (spinlock-acquire! lock)
+    (let spin ()
+      (unless (chez:box-cas! lock #f #t)
+        (spin))))
+  (define (spinlock-release! lock)
+    (chez:set-box! lock #f))
 
   ;; --- misc ---
   (define iota
