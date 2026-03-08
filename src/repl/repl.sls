@@ -152,6 +152,121 @@
       '(import (compat std-disasm))
       repl-env))
 
+  ;; --- Expeditor (Chez expression editor) support ---
+  ;; Chez's expeditor provides line editing, history, and paren matching.
+  ;; We use new-cafe with a custom waiter-prompt-and-read for Gerbil syntax.
+
+  (define *use-expeditor* #t)  ;; set to #f for basic mode (pipes, scripts)
+
+  (define (expeditor-available?)
+    ;; Expeditor requires a terminal and TERM env var
+    (and (getenv "TERM")
+         (guard (exn [#t #f])
+           ;; Check if we can import the expression-editor module
+           (chez:eval '(import (expression-editor)) (interaction-environment))
+           #t)))
+
+  (define (setup-expeditor!)
+    ;; Add Gerbil-specific identifiers to tab completion
+    (guard (exn [#t (void)])
+      (chez:eval
+        '(begin
+           (import (expression-editor))
+           (ee-common-identifiers
+             (append
+               '(def defstruct defclass defrules defsyntax defmethod
+                 import export begin-syntax begin-foreign
+                 with-catch try catch finally
+                 using hash-ref hash-put! hash-remove!
+                 spawn thread-start! thread-join!
+                 match with else =>
+                 displayln pregexp-match
+                 call-with-input-file call-with-output-file
+                 string-append string-length substring
+                 for-each map filter fold)
+               (ee-common-identifiers))))
+        (interaction-environment))))
+
+  (define (repl-loop-expeditor)
+    ;; Use new-cafe with custom prompt and eval
+    ;; new-cafe handles: line editing, history, paren matching, tab completion
+    (parameterize ([waiter-prompt-string "gxi"])
+      (new-cafe
+        (lambda (form)
+          (unless (eof-object? form)
+            (handle-form/chez form))))))
+
+  (define (handle-form/chez form)
+    ;; Handle forms read by Chez's reader (not Gerbil's reader)
+    ;; Chez reader doesn't know Gerbil syntax, so we compile as-is
+    (cond
+      ;; Comma commands: Chez reader turns ,foo into (unquote foo)
+      ((and (pair? form) (eq? (car form) 'unquote))
+       (handle-comma-command-chez (cdr form)))
+      ;; Silently ignore export forms
+      ((and (pair? form) (eq? (car form) 'export))
+       (chez:void))
+      ;; Resolve Gerbil-style imports
+      ((and (pair? form) (eq? (car form) 'import))
+       (guard (exn (#t (display-error "import error" exn)))
+         (eval-import-form form)))
+      (else
+       (eval-and-print form))))
+
+  (define (handle-comma-command-chez args)
+    ;; When using expeditor, the form after the comma is already read
+    (let ((cmd (if (pair? args) (car args) args)))
+      (cond
+        ((memq cmd '(q quit))
+         (printf "Bye.~n")
+         (exit 0))
+        ((memq cmd '(h help))
+         (print-help))
+        ((and (pair? args) (eq? cmd 'load) (pair? (cdr args)))
+         (let ((path (let ([p (cadr args)])
+                       (if (string? p) p (symbol->string p)))))
+           (guard (exn (#t (display-error "load error" exn)))
+             (gxi-eval-file path)
+             (printf "Loaded ~a~n" path))))
+        ((eq? cmd 'load)
+         (printf "Usage: ,load <filename>~n"))
+        ((and (pair? args) (eq? cmd 'expand) (pair? (cdr args)))
+         (guard (exn (#t (display-error "expand error" exn)))
+           (let ((compiled (gerbil-compile-top (cadr args))))
+             (pretty-print compiled)
+             (newline))))
+        ((eq? cmd 'expand)
+         (printf "Usage: ,expand <form>~n"))
+        ((and (pair? args) (memq cmd '(dis disassemble)) (pair? (cdr args)))
+         (let* ((datum (cadr args))
+                (target
+                  (cond
+                    ((and (symbol? datum)
+                          (hashtable-ref *source-registry* datum #f))
+                     => (lambda (src) src))
+                    ((and (pair? datum) (eq? (car datum) 'quote)
+                          (pair? (cdr datum)) (symbol? (cadr datum))
+                          (hashtable-ref *source-registry* (cadr datum) #f))
+                     => (lambda (src) src))
+                    (else datum))))
+           (guard (exn (#t (display-error "dis error" exn)))
+             (let* ((compiled (gerbil-compile-top target))
+                    (optimized
+                      (parameterize ([print-gensym #f])
+                        (expand/optimize compiled repl-env))))
+               (printf "--- Gerbil → Chez ---~n")
+               (parameterize ([print-gensym #f])
+                 (pretty-print compiled))
+               (printf "~n--- Chez optimized ---~n")
+               (parameterize ([print-gensym #f])
+                 (pretty-print optimized))
+               (printf "~n--- Assembly ---~n")
+               (disassemble compiled)
+               (newline)))))
+        (else
+         (printf "Unknown command: ,~a~n" cmd)
+         (print-help)))))
+
   (define (gxi-start args)
     (init-repl-env!)
     (init-module-loader!)
@@ -162,7 +277,12 @@
       (else
        ;; Interactive REPL
        (print-banner)
-       (repl-loop))))
+       (if (and *use-expeditor* (expeditor-available?))
+         (begin
+           (setup-expeditor!)
+           (printf "Line editing enabled (Chez expeditor).~n")
+           (repl-loop-expeditor))
+         (repl-loop)))))
 
   (define (print-banner)
     (printf "Gherkin ~a — Gerbil on ~a~n"

@@ -7,7 +7,8 @@
     error error? raise with-exception-handler identifier?
     hash-table? make-hash-table)
   (except (compat gambit-compat)
-    make-thread thread-start! thread-join! thread-sleep! thread-yield!)
+    make-thread thread-start! thread-join! thread-sleep! thread-yield!
+    make-condition-variable condition-variable-signal! condition-variable-broadcast!)
   (compat types)
   (compat threading)
   (reader reader)

@@ -12,7 +12,8 @@
     gerbil-resolve-module-path
     gerbil-module-loaded?
     gerbil-loaded-modules
-    gerbil-module-source-dir)
+    gerbil-module-source-dir
+    *enable-cache*)
 
   (import
     (except (chezscheme) void box box? unbox set-box!
@@ -41,11 +42,14 @@
   ;; Gerbil source root directory
   (define *gerbil-src-dir* #f)
 
-  ;; Output directory for compiled forms
+  ;; Output directory for compiled forms (also serves as cache)
   (define *output-dir* "/tmp/gherkin-modules/")
 
   ;; Verbose logging
   (define *verbose* #f)
+
+  ;; Module caching: skip recompilation if cache is newer than source
+  (define *enable-cache* #t)
 
   ;; ============================================================
   ;; Initialization
@@ -301,12 +305,71 @@
               [else
                (loop (cdr forms) (cons form result))]))))))
 
+  ;; ============================================================
+  ;; Module caching
+  ;; ============================================================
+
+  (define (cache-path mod-id)
+    "Return the cache file path for a module ID."
+    (string-append *output-dir* (string-replace mod-id "/" "_") ".ss"))
+
+  (define (file-mtime path)
+    "Get file modification time, or #f if file doesn't exist."
+    (guard (exn [#t #f])
+      (file-change-time path)))
+
+  (define (cache-valid? mod-id source-path)
+    "Check if the cached compiled output is newer than the source file."
+    (and *enable-cache*
+         (let ([cached (cache-path mod-id)]
+               [src-mtime (file-mtime source-path)])
+           (and src-mtime
+                (file-exists? cached)
+                (let ([cache-mtime (file-mtime cached)])
+                  (and cache-mtime
+                       (time>? cache-mtime src-mtime)))))))
+
+  (define (load-from-cache mod-id)
+    "Load a module from its cached compiled output. Returns #t on success."
+    (let ([cached (cache-path mod-id)]
+          [error-count 0])
+      (when *verbose*
+        (printf "  Loading ~a from cache~n" mod-id))
+      (guard (exn [#t
+        (when *verbose*
+          (printf "  Cache load failed for ~a: ~a~n" mod-id
+            (if (message-condition? exn) (condition-message exn) exn)))
+        #f])
+        (let ([port (open-input-file cached)])
+          (let eval-loop ()
+            (let ([form (read port)])
+              (unless (eof-object? form)
+                (unless (and (pair? form) (memq (car form) '(import export)))
+                  (guard (exn [#t
+                    (set! error-count (+ error-count 1))])
+                    (eval form)))
+                (eval-loop))))
+          (close-input-port port)
+          (hashtable-set! *module-registry* mod-id #t)
+          (when *verbose*
+            (printf "  ~a: loaded from cache (~a eval errors)~n" mod-id error-count))
+          #t))))
+
+  ;; ============================================================
+  ;; Module compilation and loading
+  ;; ============================================================
+
   (define (compile-and-load-module mod-id source-path)
     "Compile a Gerbil source file and evaluate it.
      Follows the same pattern as the test harness: strip annotations,
-     pre-register defrules/defrule, compile, write, eval."
-    (when *verbose*
-      (printf "  Loading module: ~a~n" mod-id))
+     pre-register defrules/defrule, compile, write, eval.
+     Uses cache if available and source hasn't changed."
+    ;; Try cache first
+    (if (cache-valid? mod-id source-path)
+      (load-from-cache mod-id)
+      (begin
+        (when *verbose*
+          (printf "  Compiling module: ~a~n" mod-id))
 
     ;; Extract source directory for include resolution
     (let* ([source-dir (let ([s source-path])
@@ -388,7 +451,7 @@
           ;; Consider it loaded even with eval errors
           ;; (many are expected define-syntax failures)
           (hashtable-set! *module-registry* mod-id #t)
-          (values (length compiled) error-count)))))
+          (values (length compiled) error-count)))))))
 
   (define (string-replace str old new)
     (let ([slen (string-length str)]

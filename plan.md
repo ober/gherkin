@@ -369,11 +369,31 @@ Tested via gherkin bridge — modules are compiled from source through gherkin a
 - [x] Gerbil reader preserves source locations (file, line, column) in annotated datums
 - [x] Error messages include source information from annotation
 
-### H.5 Future work (not blocking)
+### H.5 Tab completion via Chez expeditor ✅
 
-- [ ] Tab completion via readline/linenoise
-- [ ] Module compilation caching (`.zo` equivalent)
-- [ ] Package manager integration (`gxpkg` equivalent)
+- [x] Chez's built-in expeditor provides line editing, history, and paren matching
+- [x] `new-cafe` integration with custom eval for Gerbil forms
+- [x] Gerbil-specific identifiers added to `ee-common-identifiers` for tab completion
+- [x] Auto-detection: falls back to basic REPL when terminal not available (pipes, scripts)
+
+### H.6 Module compilation caching ✅
+
+- [x] Cache compiled output in `/tmp/gherkin-modules/`
+- [x] File modification time comparison: skip recompilation if cache is newer than source
+- [x] `*enable-cache*` flag to disable caching when needed
+- [x] `load-from-cache` loads pre-compiled forms directly, bypassing gherkin
+
+### H.7 Package manager ✅
+
+- [x] `src/tools/pkg.sls` — full `gxpkg`-equivalent package manager
+- [x] Commands: `build`, `clean`, `deps`, `install`, `uninstall`, `update`, `link`, `unlink`, `list`, `new`
+- [x] `gerbil.pkg` parsing and package prefix resolution
+- [x] Build spec parsing (`defbuild-script` in `build.ss`)
+- [x] Git-based package install/update
+- [x] Project scaffolding (`pkg-new`)
+
+### H.8 Future work
+
 - [ ] `gxi` using Gerbil's expander for macro expansion (currently uses gherkin)
 
 ---
@@ -411,7 +431,7 @@ The following phases established the cross-compilation bootstrap:
 | 6 | Standard library | 14 std modules loaded |
 | 7 | REPL and tooling | Working REPL with gherkin-based compilation |
 
-**Test harness:** `tests/self-host-core.ss` — 147/147 checks pass
+**Test harness:** `tests/self-host-core.ss` — 152/152 checks pass
 
 ---
 

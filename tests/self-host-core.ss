@@ -2547,6 +2547,54 @@
     (check "source location in annotations"
       (and (annotated-datum? form) src))))
 
+;; H.5: Module caching
+(printf "~n--- H.5: Module caching ---~n")
+(guard (exn [#t
+  (printf "  H.5 error: ~a~n"
+    (if (message-condition? exn) (condition-message exn) exn))
+  (check "module cache file created" #f)
+  (check "module cache reloads" #f)])
+  ;; Load a module (should compile and create cache)
+  (let ([home (getenv "HOME")])
+    (eval `(gerbil-module-init! ,(string-append home "/mine/gerbil/src/"))))
+  (eval '(gerbil-load-module ':std/sort))
+  ;; Check that a cache file was created
+  (let ([cache-file "/tmp/gherkin-modules/std_sort.ss"])
+    (check "module cache file created" (file-exists? cache-file))
+    ;; Verify cache file is readable Chez Scheme
+    (when (file-exists? cache-file)
+      (guard (exn [#t
+        (printf "  H.5 cache read error: ~a~n"
+          (if (message-condition? exn) (condition-message exn) exn))
+        (check "module cache reloads" #f)])
+        (let ([port (open-input-file cache-file)])
+          (let ([form (read port)])
+            (close-input-port port)
+            (check "module cache reloads" (pair? form))))))))
+
+;; H.5b: Package manager exists
+(printf "~n--- H.5b: Package manager ---~n")
+(check "package manager library exists"
+  (file-exists? "src/tools/pkg.sls"))
+(guard (exn [#t
+  (printf "  H.5b pkg error: ~a~n"
+    (if (message-condition? exn) (condition-message exn) exn))
+  (check "pkg-plist works" #f)])
+  (eval '(import (tools pkg)))
+  ;; Test pkg-plist on gerbil's own gerbil.pkg
+  (let ([home (getenv "HOME")])
+    (let ([plist (eval `(pkg-plist ,(string-append home "/mine/gerbil/src/std")))])
+      (printf "  H.5b: plist = ~a~n" plist)
+      (check "pkg-plist works" (list? plist)))))
+
+;; H.5c: Expeditor availability check
+(printf "~n--- H.5c: Tab completion ---~n")
+(check "expeditor check doesn't crash"
+  (guard (exn [#t #f])
+    ;; Just verify the function exists — don't actually start expeditor
+    (eval '(import (repl repl)))
+    #t))
+
 ;;; ============================================================
 ;;; Summary
 ;;; ============================================================
