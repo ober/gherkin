@@ -25,7 +25,7 @@
     thread? thread-specific thread-specific-set!
 
     ;; Mutex operations (Gambit API names)
-    make-mutex-gambit mutex? mutex-name
+    make-mutex make-mutex-gambit mutex? mutex-name
     mutex-lock! mutex-unlock!
     mutex-specific mutex-specific-set!
 
@@ -174,6 +174,9 @@
     (case-lambda
       [() (make-gerbil-mutex (chez:make-mutex) 'anonymous (void))]
       [(name) (make-gerbil-mutex (chez:make-mutex) name (void))]))
+
+  ;; Gambit-compatible make-mutex: accepts optional string/symbol name
+  (define make-mutex make-mutex-gambit)
 
   (define (mutex? x) (gerbil-mutex? x))
   (define (mutex-name m) (gerbil-mutex-name-val m))

@@ -266,6 +266,46 @@
 
     ;; f64vector (Gambit's native float64 vectors)
     f64vector-ref f64vector-set! make-f64vector f64vector-length
+
+    ;; String/byte I/O (with-output-to-string re-exported from chezscheme)
+    ;; string->bytes and bytes->string are in (runtime util)
+    call-with-input-string call-with-output-string
+    read-line
+    write-subu8vector read-subu8vector/gambit
+
+    ;; File & path operations (file-exists?, file-directory? re-exported from chezscheme)
+    file-info file-info? file-info-type file-info-size
+    file-info-device file-info-inode file-info-owner file-info-group
+    file-info-mode file-info-last-modification-time file-info-last-access-time
+    directory-files path-normalize path-expand
+    output-port-byte-position
+
+    ;; Process management
+    open-process open-input-process process-status process-pid
+
+    ;; Port operations (close-port is from chezscheme)
+    force-output write-u8
+
+    ;; Environment (getenv is from chezscheme)
+    setenv get-environment-variables
+    user-info user-info-home user-name
+
+    ;; Time
+    current-second time->seconds
+
+    ;; Threading extras
+    spawn thread-state
+    thread-state-normally-terminated? thread-state-abnormally-terminated?
+
+    ;; Numeric
+    random-integer arithmetic-shift
+
+    ;; Control flow
+    let/cc
+
+    ;; Misc
+    pp with-exception-catcher tty-mode-set!
+    |##cpu-count| |##set-gambitdir!|
     )
 
   (import (except (chezscheme)
@@ -1454,19 +1494,20 @@
   (define (gambit-create-symbolic-link target link-name)
     (void)) ;; stub - would need FFI
 
-  ;; File info
+  ;; File info — extended with metadata fields
   (define-record-type gambit-file-info-record
-    (fields type))
+    (fields type size-val device-val inode-val
+            owner-val group-val mode-val mtime-val atime-val))
 
   (define (gambit-file-info path . rest)
-    ;; Return a simple record with file type
+    ;; Return a record with file metadata (basic implementation)
     (cond
       [(file-directory? path)
-       (make-gambit-file-info-record 'directory)]
+       (make-gambit-file-info-record 'directory 0 0 0 0 0 0 0 0)]
       [(file-exists? path)
-       (make-gambit-file-info-record 'regular)]
+       (make-gambit-file-info-record 'regular 0 0 0 0 0 0 0 0)]
       [else
-       (make-gambit-file-info-record #f)]))
+       (make-gambit-file-info-record #f 0 0 0 0 0 0 0 0)]))
 
   (define gambit-file-info? gambit-file-info-record?)
 
@@ -1505,5 +1546,245 @@
                         __serial-counter)])
           (eq-hashtable-set! __serial-number-table obj n)
           n)))
+
+  ;;; ================================================================
+  ;;; Missing Gambit APIs for gerbil-shell self-hosting
+  ;;; ================================================================
+
+  ;; --- String/byte I/O ---
+  (define (call-with-input-string str proc)
+    (let ((p (open-input-string str)))
+      (let ((result (proc p)))
+        (close-input-port p)
+        result)))
+
+  (define (call-with-output-string proc)
+    (let ((p (open-output-string)))
+      (proc p)
+      (get-output-string p)))
+
+  ;; with-output-to-string is provided by Chez natively
+
+  (define read-line
+    (case-lambda
+      (() (get-line (current-input-port)))
+      ((port) (get-line port))))
+
+  ;; string->bytes and bytes->string are in (runtime util)
+
+  (define (write-subu8vector bv start end . maybe-port)
+    (let ((port (if (pair? maybe-port) (car maybe-port) (current-output-port))))
+      (put-bytevector port bv start (fx- end start))))
+
+  (define (read-subu8vector/gambit bv start end . maybe-port)
+    (let ((port (if (pair? maybe-port) (car maybe-port) (current-input-port))))
+      (get-bytevector-n! port bv start (fx- end start))))
+
+  ;; --- File & path operations ---
+
+  ;; file-exists? and file-directory? are provided by Chez natively
+
+  ;; file-info aliases mapping to gambit-file-info-record
+  (define file-info gambit-file-info)
+  (define file-info? gambit-file-info?)
+  (define file-info-type gambit-file-info-type)
+  (define file-info-size gambit-file-info-record-size-val)
+  (define file-info-device gambit-file-info-record-device-val)
+  (define file-info-inode gambit-file-info-record-inode-val)
+  (define file-info-owner gambit-file-info-record-owner-val)
+  (define file-info-group gambit-file-info-record-group-val)
+  (define file-info-mode gambit-file-info-record-mode-val)
+  (define file-info-last-modification-time gambit-file-info-record-mtime-val)
+  (define file-info-last-access-time gambit-file-info-record-atime-val)
+
+  (define (directory-files . args)
+    ;; Gambit directory-files takes keyword args; we support path: or positional
+    (let ((path (cond
+                  ((null? args) ".")
+                  ((string? (car args)) (car args))
+                  (else "."))))
+      (directory-list path)))
+
+  (define (path-normalize path)
+    (gambit-path-expand path))
+
+  (define (path-expand path . rest)
+    (gambit-path-expand path))
+
+  (define (output-port-byte-position port pos)
+    (set-port-position! port pos))
+
+  ;; --- Process management ---
+  ;; Process ports: stores Chez process ports + pid
+  (define-record-type gambit-process-port
+    (fields input output pid-val))
+
+  (define (open-process settings)
+    ;; Parse Gambit's property-list settings: (path: "cmd" arguments: '("a") ...)
+    (let* ((path (let lp ((s settings))
+                   (cond ((null? s) "/bin/sh")
+                         ((and (symbol? (car s)) (eq? (car s) 'path:) (pair? (cdr s)))
+                          (cadr s))
+                         (else (lp (cdr s))))))
+           (arguments (let lp ((s settings))
+                        (cond ((null? s) '())
+                              ((and (symbol? (car s)) (eq? (car s) 'arguments:) (pair? (cdr s)))
+                               (cadr s))
+                              (else (lp (cdr s))))))
+           (cmd (string-append path
+                  (let lp ((args arguments) (acc ""))
+                    (if (null? args) acc
+                        (lp (cdr args)
+                            (string-append acc " " (car args))))))))
+      ;; Use Chez's process function which returns (to-stdin from-stdout from-stderr pid)
+      (let-values (((to-stdin from-stdout from-stderr pid) (process cmd)))
+        (make-gambit-process-port from-stdout to-stdin pid))))
+
+  (define (open-input-process settings)
+    (open-process settings))
+
+  (define (process-status port)
+    ;; For gambit-process-port, wait and return exit status
+    (if (gambit-process-port? port)
+      0  ;; TODO: waitpid on (gambit-process-port-pid-val port)
+      0))
+
+  (define (process-pid port)
+    (if (gambit-process-port? port)
+      (gambit-process-port-pid-val port)
+      0))
+
+  ;; --- Port operations ---
+  (define (force-output . maybe-port)
+    (flush-output-port
+      (if (pair? maybe-port) (car maybe-port) (current-output-port))))
+
+  (define write-u8
+    (case-lambda
+      ((byte) (put-u8 (current-output-port) byte))
+      ((byte port) (put-u8 port byte))))
+
+  ;; close-port is provided by Chez natively
+
+  ;; --- Environment ---
+  ;; getenv is from Chez natively
+
+  (define (setenv name value)
+    (putenv name value))
+
+  (define (get-environment-variables)
+    ;; Return alist of all env vars by reading /proc/self/environ
+    (guard (exn (#t '()))
+      (let* ((content (call-with-port
+                        (open-file-input-port "/proc/self/environ")
+                        (lambda (p) (get-bytevector-all p))))
+             (str (utf8->string content)))
+        (let lp ((i 0) (start 0) (acc '()))
+          (cond
+            ((>= i (string-length str))
+             (reverse acc))
+            ((char=? (string-ref str i) #\nul)
+             (let ((entry (substring str start i)))
+               (let ((eq-pos (let scan ((j 0))
+                               (cond ((>= j (string-length entry)) #f)
+                                     ((char=? (string-ref entry j) #\=) j)
+                                     (else (scan (+ j 1)))))))
+                 (if eq-pos
+                   (lp (+ i 1) (+ i 1)
+                       (cons (cons (substring entry 0 eq-pos)
+                                   (substring entry (+ eq-pos 1) (string-length entry)))
+                             acc))
+                   (lp (+ i 1) (+ i 1) acc)))))
+            (else (lp (+ i 1) start acc)))))))
+
+  ;; --- User info ---
+  (define-record-type gambit-user-info (fields name-val home-val uid-val))
+
+  (define (user-info . args)
+    (let ((name (or (getenv "USER") "unknown"))
+          (home (or (getenv "HOME") "/tmp"))
+          (uid 0)) ;; TODO: get real UID via FFI
+      (make-gambit-user-info name home uid)))
+
+  (define user-info-home gambit-user-info-home-val)
+
+  (define (user-name . args)
+    (or (getenv "USER") "unknown"))
+
+  ;; --- Time ---
+  (define (current-second)
+    (let ((t (current-time)))
+      (+ (time-second t)
+         (/ (time-nanosecond t) 1000000000.0))))
+
+  (define (time->seconds t)
+    (if (time? t)
+      (+ (time-second t)
+         (/ (time-nanosecond t) 1000000000.0))
+      t))
+
+  ;; --- Threading extras ---
+  (define (spawn thunk)
+    (fork-thread thunk))
+
+  ;; Thread state — simplified for Chez
+  (define-record-type gambit-thread-state
+    (fields terminated? normally? result exception))
+
+  (define (thread-state t)
+    (make-gambit-thread-state #f #f #f #f))
+
+  (define (thread-state-normally-terminated? s)
+    (and (gambit-thread-state? s) (gambit-thread-state-normally? s)))
+
+  (define (thread-state-abnormally-terminated? s)
+    (and (gambit-thread-state? s)
+         (gambit-thread-state-terminated? s)
+         (not (gambit-thread-state-normally? s))))
+
+  ;; --- Numeric ---
+  (define (random-integer n)
+    (random n))
+
+  (define arithmetic-shift ash)
+
+  ;; --- Control flow ---
+  (define-syntax let/cc
+    (syntax-rules ()
+      ((_ k body ...)
+       (call-with-current-continuation (lambda (k) body ...)))))
+
+  ;; --- Misc ---
+  (define pp pretty-print)
+
+  (define (with-exception-catcher handler thunk)
+    (guard (exn (#t (handler exn)))
+      (thunk)))
+
+  (define (tty-mode-set! port mode)
+    ;; TODO: implement via FFI (termios)
+    (void))
+
+  (define (|##cpu-count|)
+    ;; Read from /proc/cpuinfo or sysconf
+    (guard (exn (#t 1))
+      (let ((content (call-with-input-file "/proc/cpuinfo"
+                       (lambda (p) (get-string-all p)))))
+        (let lp ((i 0) (count 0))
+          (cond
+            ((>= (+ i 9) (string-length content)) (max 1 count))
+            ((string=? (substring content i (+ i 9)) "processor")
+             (lp (+ i 1) (+ count 1)))
+            (else (lp (+ i 1) count)))))))
+
+  (define (|##set-gambitdir!| dir) (void))
+
+  ;; --- Helper: string-join ---
+  (define (string-join lst sep)
+    (if (null? lst) ""
+        (let lp ((rest (cdr lst)) (acc (car lst)))
+          (if (null? rest) acc
+              (lp (cdr rest)
+                  (string-append acc sep (car rest)))))))
 
   ) ;; end library

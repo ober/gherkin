@@ -24,6 +24,8 @@
     Error? Error-message Error-irritants
     ;; Gambit error-exception compat
     error-exception? error-exception-message os-exception?
+    ;; Formatted exception message
+    exception-message
     )
 
   (import
@@ -200,5 +202,34 @@
     (or (i/o-error? e)
         (and (condition? e)
              (message-condition? e))))
+
+  ;; Formatted exception message — extracts a human-readable message string.
+  ;; Chez's condition-message returns format templates like "variable ~:s is not bound"
+  ;; which aren't useful directly. This uses display-condition to format properly.
+  (define (exception-message e)
+    (define (format-condition e)
+      (let ((msg (call-with-string-output-port
+                   (lambda (p) (display-condition e p)))))
+        ;; Strip "Exception: " or "Exception in <who>: " prefix
+        (cond
+          ((and (> (string-length msg) 11)
+                (string=? (substring msg 0 11) "Exception: "))
+           (substring msg 11 (string-length msg)))
+          ((and (> (string-length msg) 13)
+                (string=? (substring msg 0 13) "Exception in "))
+           (let lp ((i 13))
+             (cond
+               ((>= (+ i 1) (string-length msg)) msg)
+               ((and (char=? (string-ref msg i) #\:)
+                     (char=? (string-ref msg (+ i 1)) #\space))
+                (substring msg (+ i 2) (string-length msg)))
+               (else (lp (+ i 1))))))
+          (else msg))))
+    (cond
+      ((string? e) e)
+      ((Error? e) (Error-message e))
+      ((condition? e) (format-condition e))
+      (else (call-with-string-output-port
+              (lambda (p) (display e p))))))
 
   ) ;; end library

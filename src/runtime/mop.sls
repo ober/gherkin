@@ -28,7 +28,7 @@
     make-class-slot-accessor make-class-slot-mutator
     make-class-slot-unchecked-accessor make-class-slot-unchecked-mutator
     ;; instance operations
-    make-class-instance class-instance-init! class-instance?
+    make-instance make-class-instance class-instance-init! class-instance?
     struct-instance? direct-class-instance? direct-struct-instance?
     ;; slot operations
     slot-ref slot-set! unchecked-slot-ref unchecked-slot-set!
@@ -316,12 +316,68 @@
   (define make-class-slot-unchecked-accessor make-class-slot-accessor)
   (define make-class-slot-unchecked-mutator make-class-slot-mutator)
 
+  ;; --- Keyword argument helpers ---
+  ;; Check if a value is a keyword symbol (symbol ending with :)
+  (define (keyword-symbol? v)
+    (and (symbol? v)
+         (let ((s (symbol->string v)))
+           (and (fx> (string-length s) 1)
+                (char=? (string-ref s (fx- (string-length s) 1)) #\:)))))
+
+  ;; Strip keyword symbols from an argument list, keeping values positionally.
+  ;; (strip-kw-args '(parent: env name: "gsh")) → '(env "gsh")
+  (define (strip-kw-args args)
+    (let lp ((rest args) (acc '()))
+      (cond
+        ((null? rest) (reverse acc))
+        ((and (keyword-symbol? (car rest)) (pair? (cdr rest)))
+         ;; Skip keyword, keep value
+         (lp (cddr rest) (cons (cadr rest) acc)))
+        (else
+         (lp (cdr rest) (cons (car rest) acc))))))
+
+  ;; Check if args contain keyword symbols
+  (define (has-keyword-args? args)
+    (let lp ((rest args))
+      (cond
+        ((null? rest) #f)
+        ((keyword-symbol? (car rest)) #t)
+        (else (lp (cdr rest))))))
+
   ;; --- Instance operations ---
-  (define (make-class-instance klass . args)
-    (let ((n (class-type-field-count klass)))
-      (let ((obj (apply |##structure| klass (make-list n #f))))
-        (class-instance-init! obj args)
-        obj)))
+  ;; make-instance: full constructor protocol with keyword dispatch
+  ;; 1. If class has a constructor (:init!), look up the method and call it
+  ;;    with keyword args stripped to positional
+  ;; 2. Otherwise, initialize slots by keyword name (class-instance-init!)
+  (define (make-instance klass . args)
+    (let ((kons-id (class-type-constructor klass)))
+      (cond
+        ;; Class has a constructor method — use it
+        (kons-id
+         (let* ((n (class-type-field-count klass))
+                (obj (apply |##structure| klass (make-list n #f)))
+                (kons (method-ref klass kons-id)))
+           (if kons
+             ;; Strip keyword symbols so :init! gets positional args
+             (let ((stripped (if (has-keyword-args? args)
+                               (strip-kw-args args)
+                               args)))
+               (apply kons obj stripped))
+             (error "missing constructor method" klass kons-id))
+           obj))
+        ;; Struct with exact field count — direct construction
+        ((and (class-type-struct? klass)
+              (fx= (class-type-field-count klass) (length args)))
+         (apply |##structure| klass args))
+        ;; Otherwise — keyword-based slot initialization
+        (else
+         (let* ((n (class-type-field-count klass))
+                (obj (apply |##structure| klass (make-list n #f))))
+           (class-instance-init! obj args)
+           obj)))))
+
+  ;; Alias for compatibility
+  (define make-class-instance make-instance)
 
   (define (class-instance-init! obj args)
     (let* ((klass (|##structure-type| obj))

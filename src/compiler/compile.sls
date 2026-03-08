@@ -451,6 +451,14 @@
     (let ((sig (cadr form))
           (body (cddr form)))
       (cond
+        ;; Special case: (define (void) (void)) → non-recursive void
+        ;; Gerbil defines void as a function returning #!void, but the self-reference
+        ;; creates infinite recursion. Replace with safe version.
+        ((and (pair? sig) (eq? (car sig) 'void) (null? (cdr sig))
+              (pair? body) (null? (cdr body))
+              (or (equal? (car body) '(void))
+                  (void? (car body))))
+         '(define (void . _) (if #f #f)))
         ;; (def (name args...) body...) or (def (name args...) => type body...)
         ;; Also handles curried: (def ((name outer...) inner...) body...)
         ((pair? sig)
