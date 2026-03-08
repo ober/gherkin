@@ -36,9 +36,9 @@ We have a working cross-compiler (gherkin) and bootstrap environment:
 | Expander (9 files) | 100% | ✅ Works | `core-expand-expression` works, method dispatch fixed |
 | Core macros (10 files) | 100% | ⚠️ Partial | `define-syntax` forms skip (need expander) |
 | Compiler (12 files) | 100% | ⚠️ Partial | `define-syntax` forms skip |
-| Module system | ✅ Loader works | ✅ **37 std modules** | Curated subset compile and load via module loader |
+| Module system | ✅ Loader works | ✅ **62 std modules** | Curated subset compile and load via module loader |
 | REPL | ✅ Works | ✅ Gerbil syntax | Uses gherkin for compilation |
-| Test suite | **227 checks** | ✅ All pass | Compilation + loader + functionality |
+| Test suite | **252 checks** | ✅ All pass | Compilation + loader + functionality |
 
 **Phase A complete**: `core-expand-expression` works — method dispatch on expander structs is fully operational. The fix required (1) injecting `##type` and `##closure?` Gambit primitives for hash table operations at eval time, and (2) replacing `{method obj}` syntax with `(call-method obj 'method)` in eval'd context constructors since `{}` isn't a Chez reader feature.
 
@@ -496,7 +496,7 @@ Gerbil's `match` is a complex macro. Gherkin handles common cases (literal patte
 
 ### III. Standard Library Coverage
 
-~339 non-test modules in `:std/`, **37 verified via module loader** (compile + load + eval), plus 43 compat shims.
+~339 non-test modules in `:std/`, **62 verified via module loader** (compile + load + eval), plus 43 compat shims.
 
 #### III.1 Pure Scheme (easiest — no FFI, no heavy macros)
 
@@ -530,6 +530,10 @@ Gerbil's `match` is a complex macro. Gherkin handles common cases (literal patte
 | `:std/misc/shuffle` | ✅ Working | Loads via module loader |
 | `:std/misc/atom` | ✅ Working | Loads via module loader |
 | `:std/misc/walist` | ✅ Working | Loads via module loader |
+| `:std/misc/vector` | ✅ Working | Loads via module loader |
+| `:std/misc/evector` | ✅ Working | Loads via module loader |
+| `:std/misc/dag` | ✅ Working | Loads via module loader |
+| `:std/misc/decimal` | ✅ Working | Loads via module loader |
 | `:std/misc/channel` | ✅ Compiles | Needs threading primitives |
 | `:std/misc/timeout` | ✅ Compiles | Needs threading primitives |
 | `:std/misc/lru` | ✅ Working | Loads via module loader |
@@ -540,9 +544,29 @@ Gerbil's `match` is a complex macro. Gherkin handles common cases (literal patte
 | `:std/srfi/9` | ✅ Working | Loads via module loader |
 | `:std/srfi/13` | ✅ Working | Loads via module loader |
 | `:std/srfi/14` | ✅ Working | Loads via module loader |
-| `:std/srfi/41` | ✅ Compiles | streams |
+| `:std/srfi/19` | ✅ Working | Loads via module loader |
+| `:std/srfi/41` | ✅ Working | Loads via module loader |
+| `:std/srfi/42` | ✅ Working | Loads via module loader |
 | `:std/srfi/43` | ✅ Working | Loads via module loader |
+| `:std/srfi/95` | ✅ Working | Loads via module loader |
+| `:std/srfi/101` | ✅ Working | Loads via module loader |
+| `:std/srfi/115` | ✅ Working | Loads via module loader |
+| `:std/srfi/116` | ✅ Working | Loads via module loader |
+| `:std/srfi/117` | ✅ Working | Loads via module loader |
+| `:std/srfi/121` | ✅ Working | Loads via module loader |
+| `:std/srfi/127` | ✅ Working | Loads via module loader |
+| `:std/srfi/128` | ✅ Working | Loads via module loader |
+| `:std/srfi/130` | ✅ Working | Loads via module loader |
+| `:std/srfi/132` | ✅ Working | Loads via module loader |
+| `:std/srfi/133` | ✅ Working | Loads via module loader |
+| `:std/srfi/134` | ✅ Working | Loads via module loader |
+| `:std/srfi/135` | ✅ Working | Loads via module loader |
 | `:std/sugar` | ✅ Working | Loads via module loader |
+| `:std/lazy` | ✅ Working | Loads via module loader |
+| `:std/contract` | ✅ Working | Loads via module loader |
+| `:std/deprecation` | ✅ Working | Loads via module loader |
+| `:std/hash-table` | ✅ Working | Loads via module loader |
+| `:std/stxutil` | ✅ Working | Loads via module loader |
 | `:std/cli/getopt` | ✅ Compiles | 0 compile errors |
 
 #### III.2 Text processing (moderate — mostly pure Scheme)
@@ -765,7 +789,7 @@ The following phases established the cross-compilation bootstrap:
 | 6 | Standard library | 14 std modules loaded |
 | 7 | REPL and tooling | Working REPL with gherkin-based compilation |
 
-**Test harness:** `tests/self-host-core.ss` — 227/227 checks pass
+**Test harness:** `tests/self-host-core.ss` — 252/252 checks pass
 
 ---
 

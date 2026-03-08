@@ -2742,15 +2742,24 @@
     ":std/misc/func" ":std/misc/uuid"
     ":std/misc/symbol" ":std/misc/alist" ":std/misc/plist"
     ":std/misc/list-builder" ":std/misc/completion"
+    ":std/misc/vector" ":std/misc/evector" ":std/misc/dag"
+    ":std/misc/decimal"
     ;; srfi
     ":std/srfi/1" ":std/srfi/8" ":std/srfi/9" ":std/srfi/13"
     ":std/srfi/14" ":std/srfi/43" ":std/srfi/125"
+    ":std/srfi/42" ":std/srfi/41" ":std/srfi/95" ":std/srfi/19"
+    ":std/srfi/101" ":std/srfi/115" ":std/srfi/116" ":std/srfi/117"
+    ":std/srfi/121" ":std/srfi/127" ":std/srfi/128"
+    ":std/srfi/130" ":std/srfi/132" ":std/srfi/133"
+    ":std/srfi/134" ":std/srfi/135"
     ;; text
     ":std/text/hex" ":std/text/utf8" ":std/text/csv" ":std/text/base64"
     ":std/text/json"
     ;; top-level std
     ":std/error" ":std/sort" ":std/sugar"
-    ":std/values" ":std/format" ":std/pregexp"))
+    ":std/values" ":std/format" ":std/pregexp"
+    ":std/lazy" ":std/contract" ":std/deprecation"
+    ":std/hash-table" ":std/stxutil"))
 
 (for-each (lambda (mod)
   (check (string-append "load " mod)
