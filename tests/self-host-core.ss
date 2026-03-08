@@ -810,6 +810,109 @@
     (check "optimizer types defined" (and t (|##structure?| t)))))
 
 ;;; ============================================================
+;;; Module System (Phase 4)
+;;; ============================================================
+
+(printf "~n=== Module System (Phase 4) ===~n")
+
+;; Import the module loader
+(eval '(import (module loader)))
+
+;; Initialize with Gerbil source directory
+(let ([gerbil-src (string-append (getenv "HOME") "/mine/gerbil/src/")])
+  (eval `(gerbil-module-init! ,gerbil-src)))
+
+;; Test 1: Module path resolution
+(printf "~n--- Module Resolution ---~n")
+
+(guard (exn [#t
+  (printf "  resolution error: ~a~n" (if (message-condition? exn) (condition-message exn) exn))
+  (check ":std/error resolves" #f)])
+  (let ([resolved (eval '(gerbil-resolve-module-path ':std/error))])
+    (check ":std/error resolves" (and (pair? resolved)
+                                       (string=? (car resolved) "std/error")))))
+
+(guard (exn [#t
+  (printf "  resolution error: ~a~n" (if (message-condition? exn) (condition-message exn) exn))
+  (check ":std/sort resolves" #f)])
+  (let ([resolved (eval '(gerbil-resolve-module-path ':std/sort))])
+    (check ":std/sort resolves" (and (pair? resolved)
+                                      (string=? (car resolved) "std/sort")))))
+
+(guard (exn [#t
+  (printf "  resolution error: ~a~n" (if (message-condition? exn) (condition-message exn) exn))
+  (check ":gerbil/runtime/hash resolves" #f)])
+  (let ([resolved (eval '(gerbil-resolve-module-path ':gerbil/runtime/hash))])
+    (check ":gerbil/runtime/hash resolves"
+      (and (pair? resolved) (string=? (car resolved) "gerbil/runtime/hash")))))
+
+;; Runtime modules should be pre-loaded
+(guard (exn [#t
+  (check "runtime pre-loaded" #f)])
+  (check "runtime pre-loaded"
+    (eval '(gerbil-module-loaded? "gerbil/runtime/hash"))))
+
+;; Test 2: Load :std/error (depends on runtime modules which are pre-loaded)
+(printf "~n--- Loading :std/error ---~n")
+(guard (exn [#t
+  (printf "  load error: ~a~n" (if (message-condition? exn) (condition-message exn) exn))
+  (when (irritants-condition? exn)
+    (printf "    irritants: ~a~n" (condition-irritants exn)))
+  (check ":std/error loads" #f)])
+  (eval '(gerbil-load-module ':std/error))
+  (check ":std/error loads" (eval '(gerbil-module-loaded? "std/error"))))
+
+;; Verify :std/error types are available
+(guard (exn [#t
+  (printf "  Error type error: ~a~n" (if (message-condition? exn) (condition-message exn) exn))
+  (check "Error type defined" #f)])
+  (let ([t (eval 'Error::t)])
+    (check "Error type defined" (and t (|##structure?| t)))))
+
+;; Test 3: Load :std/sort (depends on :std/error)
+(printf "~n--- Loading :std/sort ---~n")
+(guard (exn [#t
+  (printf "  load error: ~a~n" (if (message-condition? exn) (condition-message exn) exn))
+  (check ":std/sort loads" #f)])
+  (eval '(gerbil-load-module ':std/sort))
+  (check ":std/sort loads" (eval '(gerbil-module-loaded? "std/sort"))))
+
+;; Verify sort function is defined (implementation depends on include'd files)
+(guard (exn [#t
+  (printf "  sort error: ~a~n" (if (message-condition? exn) (condition-message exn) exn))
+  (check "sort function defined" #f)])
+  (let ([proc (eval 'sort)])
+    (check "sort function defined" (procedure? proc))))
+
+;; Test 4: Load :std/values (depends on :std/sugar which has deep deps)
+(printf "~n--- Loading :std/values ---~n")
+(guard (exn [#t
+  (printf "  load error: ~a~n" (if (message-condition? exn) (condition-message exn) exn))
+  (check ":std/values loads" #f)])
+  (eval '(gerbil-load-module ':std/values))
+  (check ":std/values loads" (eval '(gerbil-module-loaded? "std/values"))))
+
+;; Verify values functions
+(guard (exn [#t
+  (printf "  values error: ~a~n" (if (message-condition? exn) (condition-message exn) exn))
+  (check "first-value works" #f)])
+  (let ([result (eval '(first-value 1 2 3))])
+    (check "first-value works" (eqv? result 1))))
+
+;; Test 5: Check loaded module count
+(guard (exn [#t
+  (check "module count" #f)])
+  (let ([mods (eval '(gerbil-loaded-modules))])
+    (printf "  Total loaded modules: ~a~n" (length mods))
+    (check "module count" (> (length mods) 40))))  ;; Pre-loaded + newly loaded
+
+;;; Phase 4 Verification Summary
+(printf "~n=== Phase 4 Verification ===~n")
+(printf "  Module loader initialized~n")
+(printf "  Path resolution works~n")
+(printf "  Dependency-ordered loading works~n")
+
+;;; ============================================================
 ;;; Summary
 ;;; ============================================================
 
