@@ -997,6 +997,58 @@
     (check "std module count" (>= (length std-mods) 8))))
 
 ;;; ============================================================
+;;; REPL and Tooling (Phase 7)
+;;; ============================================================
+
+(printf "~n=== REPL and Tooling (Phase 7) ===~n")
+
+;; Test 1: REPL library loads
+(guard (exn [#t
+  (printf "  repl load error: ~a~n" (if (message-condition? exn) (condition-message exn) exn))
+  (check "REPL library loads" #f)])
+  (eval '(import (repl repl)))
+  (check "REPL library loads" #t))
+
+;; Test 2: gxi-eval-file works (script mode)
+(guard (exn [#t
+  (printf "  eval-file error: ~a~n" (if (message-condition? exn) (condition-message exn) exn))
+  (check "gxi-eval-file works" #f)])
+  ;; Create a temp test script
+  (let ([test-script "/tmp/gherkin-test-script.ss"])
+    (call-with-output-file test-script
+      (lambda (port)
+        (display "(def test-repl-value 42)\n" port))
+      'replace)
+    (eval `(gxi-eval-file ,test-script))
+    (let ([val (eval 'test-repl-value)])
+      (check "gxi-eval-file works" (eqv? val 42)))))
+
+;; Test 3: Gerbil forms compile and eval in REPL env
+(guard (exn [#t
+  (printf "  repl eval error: ~a~n" (if (message-condition? exn) (condition-message exn) exn))
+  (check "REPL Gerbil eval" #f)])
+  ;; defstruct through the compilation pipeline
+  (let* ([form '(defstruct repl-test-point (x y))]
+         [compiled (gerbil-compile-top form)])
+    (eval compiled)
+    (let ([p (eval '(make-repl-test-point 10 20))])
+      (check "REPL Gerbil eval" (and p (eqv? (eval '(repl-test-point-x (make-repl-test-point 10 20))) 10))))))
+
+;; Test 4: Module loader integration
+(guard (exn [#t
+  (printf "  module loader error: ~a~n" (if (message-condition? exn) (condition-message exn) exn))
+  (check "module loader available" #f)])
+  (eval '(import (module loader)))
+  (check "module loader available" (eval '(procedure? gerbil-load-module))))
+
+;; Test 5: ,expand command works (compile a form to Chez)
+(guard (exn [#t
+  (printf "  expand error: ~a~n" (if (message-condition? exn) (condition-message exn) exn))
+  (check "expand works" #f)])
+  (let ([compiled (gerbil-compile-top '(def (add a b) (+ a b)))])
+    (check "expand works" (and (pair? compiled) (eq? (car compiled) 'define)))))
+
+;;; ============================================================
 ;;; Summary
 ;;; ============================================================
 

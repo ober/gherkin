@@ -28,21 +28,35 @@
           annotated-datum? annotated-datum-value)
     (compiler compile)
     (boot init)
-    (compat std-disasm))
+    (compat std-disasm)
+    (module loader))
 
   ;; --- Import resolution for script/REPL mode ---
   ;; Resolve Gerbil-style imports (:std/sugar etc.) to Chez library names
   ;; and evaluate them in the REPL environment.
-  ;; Libraries that don't exist are silently skipped (the compiler handles
-  ;; those forms natively, e.g. :std/sugar → def, defstruct, etc.).
+  ;; Falls back to module loader for imports not in the compat map.
   (define (eval-import-form form)
     (let ((specs (cdr form)))  ;; strip 'import head
       (for-each
         (lambda (spec)
           (let ((r (resolve-import spec *default-import-map*)))
-            (when r
-              (guard (exn (#t (void)))  ;; skip if library not found
-                (chez:eval `(import ,r) repl-env)))))
+            (cond
+              ;; Compat map has a mapping
+              (r (guard (exn (#t (void)))
+                   (chez:eval `(import ,r) repl-env)))
+              ;; Try module loader for :std/foo style imports
+              ((and (symbol? spec)
+                    (let ([s (symbol->string spec)])
+                      (and (> (string-length s) 0)
+                           (char=? (string-ref s 0) #\:))))
+               (guard (exn (#t
+                 (printf "import: ~a~n"
+                   (if (message-condition? exn)
+                     (condition-message exn)
+                     exn))))
+                 (gerbil-load-module spec)))
+              ;; Otherwise skip (compiler handles natively)
+              (else (void)))))
         specs)))
 
   (define repl-env (interaction-environment))
@@ -61,6 +75,16 @@
              ((and (pair? name-part) (symbol? (car name-part)))
               (car name-part))
              (else #f)))))
+
+  ;; Initialize module loader for Gerbil source imports
+  (define (init-module-loader!)
+    (let ([gerbil-home (or (getenv "GERBIL_HOME")
+                           (let ([home (getenv "HOME")])
+                             (and home (string-append home "/mine/gerbil"))))])
+      (when gerbil-home
+        (let ([src-dir (string-append gerbil-home "/src/")])
+          (when (file-exists? src-dir)
+            (gerbil-module-init! src-dir))))))
 
   (define (init-repl-env!)
     ;; Load runtime bindings into the interaction environment so that
@@ -130,6 +154,7 @@
 
   (define (gxi-start args)
     (init-repl-env!)
+    (init-module-loader!)
     (cond
       ((pair? args)
        ;; Script mode: compile and eval the file

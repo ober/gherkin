@@ -15,7 +15,9 @@
   (import
     (except (chezscheme) void box box? unbox set-box! thread? make-mutex mutex? mutex-name)
     (except (compat gambit-compat)
-      make-thread thread-start! thread-join! thread-sleep! thread-yield!)
+      make-thread thread-start! thread-join! thread-sleep! thread-yield!
+      ;; These are also exported by (compat threading)
+      make-condition-variable condition-variable-signal! condition-variable-broadcast!)
     (compat types)
     (compat threading)
     (reader reader))
