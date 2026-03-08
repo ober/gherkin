@@ -274,7 +274,8 @@
             )
           (rename (only (chezscheme) make-condition)
                   (make-condition chez:make-condition))
-          (only (compat types) type-descriptor? gerbil-struct? gerbil-struct-field-vec))
+          (only (compat types) type-descriptor? gerbil-struct? gerbil-struct-field-vec
+                               make-gerbil-struct gerbil-struct-type-tag))
 
   ;;;; Special values
   ;;;; Gambit uses unique objects for void, absent, etc.
@@ -981,12 +982,11 @@
     (vector-set! obj (+ i 1) val))
 
   ;; ##make-structure — create structure with type and n fields
+  ;; Must create gerbil-struct records (same as ##structure) for consistency.
   (define (|##make-structure| type-desc n . fill)
     (let* ([f (if (null? fill) 0 (car fill))]
-           [v (make-vector (+ n 1) f)])
-      (vector-set! v 0 type-desc)
-      (putprop v 'gherkin-instance #t)
-      v))
+           [v (make-vector n f)])
+      (make-gerbil-struct type-desc v)))
 
   ;; ##type? — check if obj is a type descriptor
   ;; Recognizes gerbil-struct type descriptors (both basic 5-field and full 11-field)

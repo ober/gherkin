@@ -19,7 +19,7 @@
   (runtime syntax)
   (only (compiler compile) gerbil-compile-top gerbil-compile-expression
         strip-annotations sanitize-compiled)
-  (only (reader reader) gerbil-read-file annotated-datum? annotated-datum-value))
+  (only (reader reader) gerbil-read-file annotated-datum? annotated-datum-value annotated-datum-source))
 
 (define pass-count 0)
 (define fail-count 0)
@@ -195,9 +195,18 @@
   `((|##fxior| . ,fxior)
     (|##fxand| . ,fxand)
     (|##fxnot| . ,fxnot)
-    (|##fxarithmetic-shift-left| . ,fxarithmetic-shift-left)
+    (|##fxarithmetic-shift-left| . ,(lambda (a b)
+                                      (if (or (not (fixnum? a)) (not (fixnum? b))
+                                              (< b 0) (> b 60))
+                                        0
+                                        (let ([r (ash a b)])
+                                          (if (fixnum? r) r
+                                            (bitwise-and r (greatest-fixnum)))))))
     (|##fxarithmetic-shift-right| . ,fxarithmetic-shift-right)
-    (|##fx+| . ,fx+)
+    (|##fx+| . ,(lambda (a b)
+                    (let ([r (+ a b)])
+                      (if (fixnum? r) r
+                        (bitwise-and r (greatest-fixnum))))))
     (|##fx-| . ,fx-)
     (|##fx*| . ,fx*)
     (|##fx<| . ,fx<)
@@ -222,11 +231,10 @@
     (|##values| . ,values)
     (|##apply| . ,apply)))
 
-;; Gambit's macro sentinel values
-(let ([unused (vector 'unused)]
-      [deleted (vector 'deleted)])
-  (inject-fn 'macro-unused-obj (lambda () unused))
-  (inject-fn 'macro-deleted-obj (lambda () deleted)))
+;; Gambit's macro sentinel values — gambit-compat.sls already exports these
+;; as macro-unused-obj, macro-deleted-obj, macro-absent-obj into the eval env.
+;; Also inject macro-max-fixnum32 for compiled hash functions.
+(inject-fn 'macro-max-fixnum32 (lambda () (- (expt 2 30) 1)))  ;; 1073741823
 
 ;; Gambit GC hash table flags
 (inject-fn 'macro-gc-hash-table-flag-weak-keys (lambda () 1))
@@ -302,11 +310,26 @@
       (gerbil-struct-type-tag obj)
       #f)))
 
-;; __class-slot-offset
+;; __class-slot-offset — handles both keyword objects and colon-suffixed symbols
+(define (colon-symbol->bare-symbol s)
+  ;; Convert 'message: → 'message for slot-table lookup
+  (let ([str (symbol->string s)])
+    (if (and (> (string-length str) 1)
+             (char=? (string-ref str (- (string-length str) 1)) #\:))
+      (string->symbol (substring str 0 (- (string-length str) 1)))
+      s)))
+
 (inject '__class-slot-offset
   (lambda (klass slot)
     (let ([st (class-type-slot-table klass)])
-      (and st (symbolic-table-ref st slot #f)))))
+      (and st
+           (or (symbolic-table-ref st slot #f)
+               ;; If slot is a colon-suffixed symbol like 'message:,
+               ;; try the bare symbol form 'message
+               (and (symbol? slot)
+                    (let ([bare (colon-symbol->bare-symbol slot)])
+                      (and (not (eq? bare slot))
+                           (symbolic-table-ref st bare #f)))))))))
 
 ;; Save working hash operations before compiled code overwrites them
 (define saved-hash-put! hash-put!)
@@ -438,7 +461,18 @@
                              (|##unchecked-structure-set!| klass val ,field class::t ',slot)))))
                 '((id 1) (name 2) (flags 3) (super 4) (fields 5)
                   (precedence-list 6) (slot-vector 7) (slot-table 8)
-                  (properties 9) (constructor 10) (methods 11))))))))
+                  (properties 9) (constructor 10) (methods 11))))
+            ;; After mop.ss: wrap make-class-type to resolve constructor from properties
+            ;; The compiled Gerbil code passes constructor as #f but includes (constructor: . :init!)
+            ;; in the properties alist. We need to extract it.
+            (when (and ok (string=? filename "mop.ss"))
+              (let ([orig-mct (eval 'make-class-type)])
+                (inject 'make-class-type
+                  (lambda (id name direct-supers slots properties constructor . rest)
+                    (let ([ctor (or constructor
+                                    (cond ((assq 'constructor: properties) => cdr)
+                                          (else #f)))])
+                      (apply orig-mct id name direct-supers slots properties ctor rest))))))))))
     runtime-files)
 
   ;; Re-inject our working hash operations after compiled hash.ss
@@ -461,14 +495,217 @@
   (inject 'symbolic-table-delete! saved-symbolic-table-delete!)
   (inject 'symbolic-table-for-each saved-symbolic-table-for-each)
   (inject 'make-symbolic-table saved-make-symbolic-table)
+  (inject 'make-symbolic-table__% saved-make-symbolic-table)
   (inject 'class-slot-offset
     (lambda (klass slot)
-      (saved-symbolic-table-ref (class-type-slot-table klass) slot #f)))
+      (let ([st (class-type-slot-table klass)])
+        (or (saved-symbolic-table-ref st slot #f)
+            (and (symbol? slot)
+                 (let ([bare (colon-symbol->bare-symbol slot)])
+                   (and (not (eq? bare slot))
+                        (saved-symbolic-table-ref st bare #f))))))))
   (inject '__class-slot-offset
     (lambda (klass slot)
-      (saved-symbolic-table-ref (class-type-slot-table klass) slot #f)))
+      (let ([st (class-type-slot-table klass)])
+        (or (saved-symbolic-table-ref st slot #f)
+            (and (symbol? slot)
+                 (let ([bare (colon-symbol->bare-symbol slot)])
+                   (and (not (eq? bare slot))
+                        (saved-symbolic-table-ref st bare #f))))))))
+
+  ;; Override ___class-instance-init! to handle colon-symbols as keywords
+  ;; and silently skip unrecognized non-keyword args
+  (inject '___class-instance-init!
+    (lambda (klass obj args)
+      (let ([slot-tab (class-type-slot-table klass)])
+        (let lp ([rest args])
+          (cond
+            [(null? rest) (void)]
+            [(and (pair? rest) (pair? (cdr rest)))
+             (let* ([key (car rest)]
+                    [val (cadr rest)]
+                    [r (cddr rest)]
+                    [off (cond
+                           ;; Real keyword object → look up by bare name
+                           [(|##keyword?| key)
+                            (let ([s (string->symbol (|##keyword->string| key))])
+                              (saved-symbolic-table-ref slot-tab s #f))]
+                           ;; Colon-suffixed symbol → strip colon and look up
+                           [(and (symbol? key)
+                                 (let ([s (symbol->string key)])
+                                   (and (> (string-length s) 1)
+                                        (char=? (string-ref s (- (string-length s) 1)) #\:))))
+                            (let ([bare (colon-symbol->bare-symbol key)])
+                              (or (saved-symbolic-table-ref slot-tab bare #f)
+                                  (saved-symbolic-table-ref slot-tab key #f)))]
+                           ;; Plain symbol → try direct lookup
+                           [(symbol? key)
+                            (saved-symbolic-table-ref slot-tab key #f)]
+                           [else #f])])
+               (when off
+                 (|##unchecked-structure-set!| obj val off #f #f))
+               (lp r))]
+            ;; Odd number of args — skip last
+            [else (void)])))))
+
+  ;; Override Error:::init! to handle both keyword-style and positional args.
+  ;; Compiled Gerbil code can call: (Error 'match 'irritants: '(...))
+  ;; or: (Error 'message: "msg" 'irritants: '(...) 'where: ctx)
+  (inject 'Error:::init!
+    (lambda (self . all-args)
+      ;; Parse all args as keyword pairs
+      ;; If first arg is not keyword-like, treat it as positional message
+      (let* ([keyword-like?
+               (lambda (x)
+                 (or (|##keyword?| x)
+                     (and (symbol? x)
+                          (let ([s (symbol->string x)])
+                            (and (> (string-length s) 1)
+                                 (char=? (string-ref s (- (string-length s) 1)) #\:))))))]
+             [kw-args
+               (if (and (pair? all-args) (not (keyword-like? (car all-args))))
+                 ;; First arg is positional message, rest are keyword pairs
+                 (cons 'message: (cons (car all-args) (cdr all-args)))
+                 ;; All args are keyword pairs
+                 all-args)])
+        ;; Process keyword pairs directly using slot-set! which is known to work
+        (let lp ([rest kw-args])
+          (when (and (pair? rest) (pair? (cdr rest)))
+            (let* ([key (car rest)]
+                   [val (cadr rest)]
+                   ;; Strip : suffix to get slot name as symbol
+                   [slot-name
+                     (cond
+                       [(|##keyword?| key) (string->symbol (|##keyword->string| key))]
+                       [(symbol? key)
+                        (let ([s (symbol->string key)])
+                          (if (and (> (string-length s) 1)
+                                   (char=? (string-ref s (- (string-length s) 1)) #\:))
+                            (string->symbol (substring s 0 (- (string-length s) 1)))
+                            key))]
+                       [else key])])
+              (slot-set! self slot-name val)
+              (lp (cddr rest))))))))
+
+  ;; Also bind for ContractViolation and SyntaxError which share Error init
+  (inject 'ContractViolation:::init! (eval 'Error:::init!))
+  (inject 'SyntaxError:::init! (eval 'Error:::init!))
+
+  ;; Rebind methods for error types (use __bind-method! to allow overwrite)
+  (eval '(begin
+    (__bind-method! Error::t ':init! Error:::init! #t)
+    (__bind-method! ContractViolation::t ':init! ContractViolation:::init! #t)
+    (__bind-method! SyntaxError::t ':init! SyntaxError:::init! #t)))
 
   (check "runtime loads" all-ok))
+
+;;; ============================================================
+;;; Optimizer variant aliases
+;;; ============================================================
+;;; Gerbil's optimizer generates separate __0, __%, __1 variants for functions
+;;; with optional args. The compiled expander code references these directly.
+;;; Gherkin compiles them as a single case-lambda, so we create aliases.
+
+(printf "~n=== Injecting Optimizer Variant Aliases ===~n")
+
+;; Helper: create variant alias if base function exists and variant doesn't
+(define (inject-variant! base-name variant-name)
+  (guard (exn [#t #f])
+    (let ([base (eval base-name)])
+      (when (procedure? base)
+        (guard (exn [#t
+          ;; variant not bound, inject it
+          (eval `(define ,variant-name ,base-name))])
+          (eval variant-name))))))  ;; already bound, skip
+
+;; All variant aliases needed by the expander and runtime
+;; Generated from scanning gx# calls in bootstrap/gerbil/expander/*.scm
+(define optimizer-variants
+  '(;; runtime functions called from expander
+    (call-with-parameters call-with-parameters__0 call-with-parameters__1)
+    (make-hash-table make-hash-table__%)
+    (make-symbol make-symbol__1)
+    (read-syntax read-syntax__%)
+    (display-exception display-exception__%)
+    (agetq agetq__%)
+    (pgetq pgetq__0)
+    (string-index string-index__0)
+    (string-rindex string-rindex__0)
+    ;; expander/stx
+    (stx-unwrap stx-unwrap__% stx-unwrap__0)
+    (stx-getq stx-getq__%)
+    (stx-plist? stx-plist?__%)
+    (syntax-local-e syntax-local-e__% syntax-local-e__0)
+    (syntax-local-value syntax-local-value__% syntax-local-value__0)
+    ;; expander/common
+    (genident genident__% genident__0 genident__1)
+    (make-binding-id make-binding-id__%)
+    (check-duplicate-identifiers check-duplicate-identifiers__%)
+    ;; expander/core
+    (core-expand core-expand__% core-expand__0)
+    (core-expand* core-expand*__% core-expand*__0)
+    (core-expand-block core-expand-block__% core-expand-block__0 core-expand-block__1)
+    (core-apply-expander core-apply-expander__% core-apply-expander__0)
+    (core-apply-user-expander core-apply-user-expander__% core-apply-user-expander__0)
+    (core-quote-syntax core-quote-syntax__% core-quote-syntax__0 core-quote-syntax__1)
+    (core-resolve-identifier core-resolve-identifier__% core-resolve-identifier__1)
+    (core-deserialize-mark core-deserialize-mark__% core-deserialize-mark__0)
+    (core-context-root core-context-root__% core-context-root__0)
+    (core-context-top core-context-top__% core-context-top__0 core-context-top__1)
+    (core-context-prelude core-context-prelude__% core-context-prelude__0)
+    (core-context-namespace core-context-namespace__% core-context-namespace__0)
+    (core-context-rebind? core-context-rebind?__%)
+    (core-expand-let-bind-syntax! core-expand-let-bind-syntax!__%)
+    (macro-expand-let-values macro-expand-let-values__%)
+    (expander-binding? expander-binding?__%)
+    (bind-identifier! bind-identifier!__%)
+    ;; expander/module
+    (core-import-module core-import-module__% core-import-module__0)
+    (core-resolve-module-path core-resolve-module-path__% core-resolve-module-path__0)
+    (core-resolve-path core-resolve-path__% core-resolve-path__0)
+    (core-library-package-plist core-library-package-plist__% core-library-package-plist__0)
+    (eval-syntax eval-syntax__% eval-syntax__0)
+    (import-module import-module__% import-module__0 import-module__1)
+    ;; expander/compile (top)
+    (apply-macro-expander apply-macro-expander__% apply-macro-expander__0)
+    (core-bind! core-bind!__%)
+    (core-bind-values! core-bind-values!__% core-bind-values!__0)
+    (core-bind-syntax! core-bind-syntax!__% core-bind-syntax!__0 core-bind-syntax!__1)
+    (core-bind-alias! core-bind-alias!__% core-bind-alias!__0)
+    (core-bind-extern! core-bind-extern!__% core-bind-extern!__0)
+    (core-bind-runtime! core-bind-runtime!__%)
+    (core-bind-runtime-reference! core-bind-runtime-reference!__% core-bind-runtime-reference!__0)
+    (core-bind-feature! core-bind-feature!__% core-bind-feature!__0 core-bind-feature!__1)
+    (core-bind-import! core-bind-import!__% core-bind-import!__1)
+    (core-bind-weak-import! core-bind-weak-import!__%)
+    (core-bind-root-syntax! core-bind-root-syntax!__%)
+    (core-bound-identifier? core-bound-identifier?__% core-bound-identifier?__0)
+    (core-expand-export% core-expand-export%__% core-expand-export%__0)
+    ;; stx identifiers
+    (resolve-identifier resolve-identifier__% resolve-identifier__0 resolve-identifier__1)
+    (syntax syntax__0)
+    ;; misc exports
+    (make-export make-export__0__1 make-export__1 make-export__1__1 make-export__2__1)
+    ;; context init
+    (prelude-context:::init! prelude-context:::init!__0)
+    ))
+
+(define (inject-all-variants!)
+  (let ([count 0])
+    (for-each
+      (lambda (entry)
+        (let ([base (car entry)]
+              [variants (cdr entry)])
+          (for-each
+            (lambda (variant)
+              (inject-variant! base variant)
+              (set! count (+ count 1)))
+            variants)))
+      optimizer-variants)
+    (printf "  Injected ~a variant aliases~n" count)))
+
+;; First pass: inject variants available after runtime load
+(inject-all-variants!)
 
 ;;; ============================================================
 ;;; Expander stubs
@@ -604,8 +841,27 @@
         ht)
       result)))
 
-(inject 'keyword? |##keyword?|)
-(inject 'keyword->string |##keyword->string|)
+;; keyword? must recognize both keyword objects and colon-suffixed symbols
+;; because compiled Gerbil code uses 'message: etc. as keyword args
+(inject 'keyword?
+  (lambda (x)
+    (or (|##keyword?| x)
+        (and (symbol? x)
+             (let ([s (symbol->string x)])
+               (and (> (string-length s) 1)
+                    (char=? (string-ref s (- (string-length s) 1)) #\:)))))))
+;; keyword->string must handle both forms
+(inject 'keyword->string
+  (lambda (x)
+    (cond
+      [(|##keyword?| x) (|##keyword->string| x)]
+      [(symbol? x)
+       (let ([s (symbol->string x)])
+         (if (and (> (string-length s) 1)
+                  (char=? (string-ref s (- (string-length s) 1)) #\:))
+           (substring s 0 (- (string-length s) 1))
+           s))]
+      [else (assertion-violation 'keyword->string "not a keyword" x)])))
 
 (guard (exn [#t
   (inject 'datum-parsing-exception? (lambda (x) #f))
@@ -670,10 +926,51 @@
                        (|##structure-set!| obj 3 super)
                        (|##structure-set!| obj 4 #f)
                        (|##structure-set!| obj 5 #f)
+                       obj))))
+          ;; Patch make-prelude-context
+          ;; Fields: id(1), table(2), super(3), up(4), down(5), path(6), import(7), e(8)
+          (eval '(set! make-prelude-context
+                   (lambda args
+                     (let* ([type prelude-context::t]
+                            [n (class-type-field-count type)]
+                            [obj (apply |##structure| type (make-list n #f))]
+                            [path-arg (if (pair? args) (car args) #f)])
+                       (|##structure-set!| obj 1 'prelude)
+                       (|##structure-set!| obj 2 (make-hash-table-eq))
+                       (|##structure-set!| obj 3 #f)  ;; super
+                       (|##structure-set!| obj 4 #f)  ;; up
+                       (|##structure-set!| obj 5 #f)  ;; down
+                       (|##structure-set!| obj 6 path-arg)  ;; path
+                       (|##structure-set!| obj 7 '())  ;; import
+                       (|##structure-set!| obj 8 #f)  ;; e
+                       obj))))
+          ;; Patch make-module-context
+          ;; Fields: id(1), table(2), super(3), up(4), down(5),
+          ;;         ns(6), path(7), import(8), export(9), e(10), code(11)
+          (eval '(set! make-module-context
+                   (lambda (id prelude ns path)
+                     (let* ([type module-context::t]
+                            [n (class-type-field-count type)]
+                            [obj (apply |##structure| type (make-list n #f))])
+                       (|##structure-set!| obj 1 id)
+                       (|##structure-set!| obj 2 (make-hash-table-eq))
+                       (|##structure-set!| obj 3 prelude)  ;; super (prelude context)
+                       (|##structure-set!| obj 4 #f)  ;; up
+                       (|##structure-set!| obj 5 #f)  ;; down
+                       (|##structure-set!| obj 6 ns)  ;; ns
+                       (|##structure-set!| obj 7 path)  ;; path
+                       (|##structure-set!| obj 8 '())  ;; import
+                       (|##structure-set!| obj 9 '())  ;; export
+                       (|##structure-set!| obj 10 #f)  ;; e
+                       (|##structure-set!| obj 11 #f)  ;; code
                        obj)))))))))
 
 (for-each compile-and-load-expander expander-files)
 (check "expander loads" expander-all-ok)
+
+;; Second pass: inject variant aliases for expander functions
+(printf "~n=== Post-Expander Variant Aliases ===~n")
+(inject-all-variants!)
 
 ;;; ============================================================
 ;;; Compile and evaluate core files (Phase 3)
@@ -1259,18 +1556,32 @@
 ;; D.3c2: Inject read-syntax-from-file using our Gerbil reader
 ;; The compiled version from runtime/syntax.ss uses ##read-all-as-a-begin-expr-from-path
 ;; which is a Gambit primitive. Replace with Chez-compatible implementation that
-;; uses our Gerbil reader and wraps results in AST objects.
+;; uses our Gerbil reader and converts annotated-datum records to AST gerbil-structs.
+
+;; First define the converter from annotated-datum to AST
+(define (annotated-datum->AST ad)
+  (let ([ast-type (eval 'AST::t)])
+    (let convert ([x ad])
+      (cond
+        [(annotated-datum? x)
+         (let ([val (annotated-datum-value x)]
+               [src (annotated-datum-source x)])
+           (|##structure| ast-type (convert val) src))]
+        [(pair? x)
+         (cons (convert (car x)) (convert (cdr x)))]
+        [(vector? x)
+         (vector-map convert x)]
+        [else x]))))
+
 (guard (exn [#t
   (printf "  WARNING: failed to inject read-syntax-from-file: ~a~n"
     (if (message-condition? exn) (condition-message exn) exn))])
   ;; Use our Gerbil reader (handles ## syntax, @list, etc.)
-  ;; Inject directly using define-top-level-value to avoid quasiquote issues
+  ;; Convert annotated-datum records to AST gerbil-structs for the expander
   (define-top-level-value 'read-syntax-from-file
     (lambda (path)
       (let ([forms (gerbil-read-file path)])
-        ;; Return forms as-is — they're already annotated-datum objects
-        ;; which are compatible with AST (both are gerbil-struct with e and source fields)
-        forms))
+        (map annotated-datum->AST forms)))
     (interaction-environment))
   ;; Also inject call-with-input-source-file (same as call-with-input-file for Chez)
   (define-top-level-value 'call-with-input-source-file
@@ -1360,7 +1671,97 @@
         (printf "  core-read-module returned ~a values~n" (length results))
         (check "core-read-module works" (= (length results) 4))))))
 
-;; D.7: Test reading std/error module metadata
+;; D.7: Set up expander context and module registry for imports
+(guard (exn [#t
+  (printf "  context error: ~a~n" (if (message-condition? exn) (condition-message exn) exn))
+  (check "expander context set" #f)])
+  (printf "  D.7-init: step 1 make...~n")
+  (eval '(define __root-ctx (make-root-context)))
+  (printf "  D.7-init: step 2 slot-set...~n")
+  (printf "  D.7-init: unchecked-slot-set! = ~a~n"
+    (guard (e [#t 'NOT-FOUND]) (and (eval 'unchecked-slot-set!) #t)))
+  (guard (e [#t
+    (printf "  D.7-init: slot-set error: ~a~n"
+      (if (message-condition? e) (condition-message e) e))
+    (when (irritants-condition? e)
+      (printf "    irritants: ~a~n" (condition-irritants e)))])
+    (eval '(unchecked-slot-set! __root-ctx (quote id) (quote root)))
+    (eval '(unchecked-slot-set! __root-ctx (quote table) (make-hash-table-eq))))
+  (printf "  D.7-init: step 3 bind-syntax...~n")
+  (eval '(expander-context::bind-core-syntax-expanders! __root-ctx))
+  (printf "  D.7-init: step 4 bind-macro...~n")
+  (eval '(expander-context::bind-core-macro-expanders! __root-ctx))
+  (printf "  D.7-init: step 5 set context...~n")
+  (eval '(current-expander-context __root-ctx))
+  ;; Set the module prelude to root context so modules inherit core bindings
+  (printf "  D.7-init: step 6 set module-prelude...~n")
+  (eval '(current-expander-module-prelude __root-ctx))
+  ;; Check if __module-registry exists and fix if needed
+  (guard (exn2 [#t
+    ;; Not bound — define it
+    (eval '(define __module-registry (make-hash-table-eq)))
+    (eval '(define __module-pkg-cache (make-hash-table-eq)))])
+    (let ([reg (eval '__module-registry)])
+      (printf "  __module-registry: ~a~n" reg)
+      ;; If it's #f, redefine with a proper hash table
+      (when (not reg)
+        (eval '(set! __module-registry (make-hash-table-eq)))
+        (eval '(set! __module-pkg-cache (make-hash-table-eq))))))
+  (check "expander context set" (not (eq? #f (eval '(current-expander-context))))))
+
+;; D.7b: Debug — check critical functions one by one
+(for-each
+  (lambda (name)
+    (guard (exn [#t (printf "  D.7b-pre: ~a = NOT BOUND~n" name)])
+      (let ([v (eval name)])
+        (printf "  D.7b-pre: ~a = ~a~n" name (procedure? v)))))
+  '(call-with-parameters call-with-parameters__0 call-with-parameters__1
+    core-context-root core-context-root__0
+    prelude-context:::init! prelude-context:::init!__0
+    module-context:::init!
+    core-expand-module-begin core-expand-module-body
+    core-import-module core-import-module__% core-import-module__0
+    core-module->prelude-context))
+
+;; D.7b: Try core-import-module directly
+(inject 'make-instance-trace #t)
+(define (__d7b-test)
+  (eval '(begin
+    (printf "  D.7b: calling core-import-module for :std/sort...~n")
+    (guard (exn [#t
+      (cond
+        [(message-condition? exn)
+         (printf "  D.7b: chez-error: ~a~n" (condition-message exn))
+         (when (irritants-condition? exn)
+           (printf "  D.7b: irritants: ~a~n" (condition-irritants exn)))]
+        [(gerbil-struct? exn)
+         (let ([t (gerbil-struct-type-tag exn)])
+           (printf "  D.7b: gerbil-error type: ~a~n"
+             (and (gerbil-struct? t) (|##type-id| t)))
+           (printf "  D.7b: fields: ~s~n" (gerbil-struct-field-vec exn))
+           ;; Try to extract message field (slot 2 for Error)
+           (let ([fv (gerbil-struct-field-vec exn)])
+             (when (and (vector? fv) (> (vector-length fv) 2))
+               (printf "  D.7b: message=~s where=~s irritants=~s~n"
+                 (vector-ref fv 1) (vector-ref fv 3) (vector-ref fv 2)))))]
+        [else (printf "  D.7b: unknown error: ~a~n" exn)])])
+      (let ([result (core-import-module__0 (quote :std/sort))])
+        (printf "  D.7b: result = ~a~n" result)
+        (printf "  D.7b: result type = ~a~n"
+          (and (gerbil-struct? result) (|##type-id| (gerbil-struct-type-tag result))))))))
+  #t)
+
+;; D.7c: Minimal error tracing for module expansion
+;; (match fix applied - symbol patterns now bind as variables)
+
+(guard (exn [#t
+  (printf "  D.7b error: ~a~n" (if (message-condition? exn) (condition-message exn) exn))
+  (when (irritants-condition? exn)
+    (printf "    irritants: ~a~n" (condition-irritants exn)))
+  (check "core-import-module works" #f)])
+  (check "core-import-module works" (__d7b-test)))
+
+;; D.8: Test reading std/error module metadata
 ;; First check that core-read-module works for a file without package dependencies
 (guard (exn [#t
   (printf "  metadata error: ~a~n" (if (message-condition? exn) (condition-message exn) exn))

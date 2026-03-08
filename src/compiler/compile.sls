@@ -56,6 +56,19 @@
     (and (symbol? name)
          (hashtable-ref *keyword-functions* name #f)))
 
+  ;; Check if (define Name Val) is a type-descriptor alias pattern:
+  ;; Name matches Val minus "::t" suffix (e.g., Error → Error::t)
+  ;; In Gambit, type descriptors are callable constructors; in Chez they're not.
+  (define (type-alias-pattern? name val)
+    (let ([val-str (symbol->string val)]
+          [name-str (symbol->string name)])
+      (and (> (string-length val-str) 3)
+           (string=? (substring val-str (- (string-length val-str) 3)
+                                (string-length val-str))
+                     "::t")
+           (string=? (substring val-str 0 (- (string-length val-str) 3))
+                     name-str))))
+
   (define (register-compile-time-macro! name keywords clauses)
     ;; clauses: ((pattern template) ...)
     (hashtable-set! *compile-time-macros* name (cons keywords clauses)))
@@ -390,7 +403,14 @@
         (else
          (if (null? body)
            `(define ,sig (void))
-           `(define ,sig ,(gerbil-compile-expression (car body))))))))
+           (let ([compiled-val (gerbil-compile-expression (car body))])
+             ;; Detect (define Name Name::t) pattern — type descriptor aliases
+             ;; In Gambit, type descriptors are callable constructors; in Chez they're not.
+             ;; Generate a constructor wrapper instead.
+             (if (and (symbol? sig) (symbol? compiled-val)
+                      (type-alias-pattern? sig compiled-val))
+               `(define (,sig . args) (apply make-instance ,compiled-val args))
+               `(define ,sig ,compiled-val))))))))
 
   ;; --- def* (case-lambda define) ---
   (define (compile-def* form)
@@ -1769,7 +1789,11 @@
              (compile-match-pattern target pattern
                `(begin ,@(map gerbil-compile-expression body))
                (compile-match-clauses target rest)))
-            ;; literal
+            ;; symbol — variable binding (catch-all)
+            ((symbol? pattern)
+             `(let ((,pattern ,target))
+                ,@(map gerbil-compile-expression body)))
+            ;; literal (number, string, char, boolean, etc.)
             (else
              `(if (equal? ,target ',pattern)
                 ,(if (null? body) #t
@@ -2142,15 +2166,16 @@
                            (string->symbol (string-append (symbol->string parent) "::t"))
                            #f))
              (parent-ref (if parent-type `(list ,parent-type) `(list object::t))))
-        (let ((struct-props (cons '(struct: . #t)
-                                 (compile-class-properties props))))
+        (let* ((struct-props (cons '(struct: . #t)
+                                  (compile-class-properties props)))
+               (constructor (extract-prop 'constructor: props #f)))
         `(begin
            ;; Create type descriptor
            (define ,(string->symbol (string-append (symbol->string name) "::t"))
              (make-class-type ',type-id ',type-name ,parent-ref
                ',(if (list? fields) fields (list fields))
                ',struct-props
-               #f))
+               ',constructor))
            ;; Constructor: takes all fields (inherited + own) positionally
            ;; Allocates directly with ##structure to avoid arg-count checks
            (define (,(string->symbol (string-append "make-" (symbol->string name))) . args)
@@ -2232,37 +2257,25 @@
                             `(list ,@parent-type-refs))))
         (let ((type-sym (string->symbol (string-append (symbol->string name) "::t")))
               (make-sym (string->symbol (string-append "make-" (symbol->string name)))))
-          (let ((class-props (compile-class-properties props)))
+          (let* ((class-props (compile-class-properties props))
+                 (constructor (extract-prop 'constructor: props #f)))
           `(begin
              (define ,type-sym
                (make-class-type ',type-id ',type-name ,parent-refs
                  ',(if (list? fields) fields (list fields))
                  ',class-props
-                 #f))
-             ;; Bare class name alias (for method-set!, etc.)
-             (define ,name ,type-sym)
+                 ',constructor))
+             ;; Bare class name as constructor wrapper
+             ;; In Gambit, type descriptors are callable; in Chez, they're not.
+             ;; Delegate to make-<Name> which handles keyword arg stripping.
+             (define (,name . args) (apply ,make-sym args))
              ;; Predicate
              (define (,(string->symbol (string-append (symbol->string name) "?")) obj)
                (|##structure-instance-of?| obj ',type-id))
-             ;; Constructor: (make-<name> keyword-args...) → creates instance, calls :init!
+             ;; Constructor: (make-<name> args...) → delegates to make-instance
+             ;; make-instance handles constructor lookup (:init!), keyword dispatch, etc.
              (define (,make-sym . args)
-               (let ((obj (make-class-instance ,type-sym))
-                     (init-fn (method-ref ,type-sym ':init!)))
-                 (when init-fn
-                   ;; Strip keyword symbols from args: 'parent: val 'name: val → val val
-                   (let ((positional (let lp ((rest args) (acc '()))
-                                      (cond
-                                        ((null? rest) (reverse acc))
-                                        ((and (pair? (cdr rest))
-                                              (symbol? (car rest))
-                                              (let ((s (symbol->string (car rest))))
-                                                (and (> (string-length s) 0)
-                                                     (char=? (string-ref s (- (string-length s) 1)) #\:))))
-                                         ;; keyword: value pair → take value, skip keyword
-                                         (lp (cddr rest) (cons (cadr rest) acc)))
-                                        (else (lp (cdr rest) (cons (car rest) acc)))))))
-                     (apply init-fn obj positional)))
-                 obj))
+               (apply make-instance ,type-sym args))
              ;; Accessors and mutators for each field (checked + unchecked &prefix)
              ,@(let lp ((fs (if (list? fields) fields (list fields))) (acc '()))
                  (if (null? fs)

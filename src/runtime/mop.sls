@@ -277,12 +277,23 @@
                            struct-type?
                            eq?
                            class-type-name))))
-           (let ((props (cons (cons 'direct-slots: slots)
-                             (cons (cons 'direct-supers: direct-supers)
-                                   properties))))
+           (let* ((props (cons (cons 'direct-slots: slots)
+                              (cons (cons 'direct-supers: direct-supers)
+                                    properties)))
+                  ;; Resolve constructor: use explicit arg, then properties, then supers
+                  (constructor*
+                    (or constructor
+                        (cond ((assq 'constructor: properties) => cdr)
+                              (else #f))
+                        ;; Walk supers to find inherited constructor
+                        (let lp ((rest direct-supers))
+                          (if (null? rest) #f
+                            (or (class-type-constructor (car rest))
+                                (lp (cdr rest)))))))
+)
              (make-class-type-descriptor
                id name (if (pair? direct-supers) (car direct-supers) #f)
-               plist slot-vector props constructor slot-table
+               plist slot-vector props constructor* slot-table
                (or methods (make-symbolic-table #f 0)))))))))
 
   ;; --- Predicates ---

@@ -257,31 +257,50 @@
   (define |##structure-ref|
     (case-lambda
       ((obj field-index)
-       (vector-ref (gerbil-struct-field-vec obj) (fx- field-index 1)))
+       (if (gerbil-struct? obj)
+         (vector-ref (gerbil-struct-field-vec obj) (fx- field-index 1))
+         (vector-ref obj field-index)))
       ((obj field-index type-desc slot-name)
-       (vector-ref (gerbil-struct-field-vec obj) (fx- field-index 1)))))
+       (if (gerbil-struct? obj)
+         (vector-ref (gerbil-struct-field-vec obj) (fx- field-index 1))
+         (vector-ref obj field-index)))))
 
   (define |##structure-set!|
     (case-lambda
       ((obj field-index val)
-       (vector-set! (gerbil-struct-field-vec obj) (fx- field-index 1) val))
+       (if (gerbil-struct? obj)
+         (vector-set! (gerbil-struct-field-vec obj) (fx- field-index 1) val)
+         (vector-set! obj field-index val)))
       ((obj val field-index type-desc slot-name)
-       (vector-set! (gerbil-struct-field-vec obj) (fx- field-index 1) val))))
+       (if (gerbil-struct? obj)
+         (vector-set! (gerbil-struct-field-vec obj) (fx- field-index 1) val)
+         (vector-set! obj field-index val)))))
 
-  ;; Unchecked variants (same implementation, just skip validation)
+  ;; Unchecked variants — handle both gerbil-struct and plain vectors.
+  ;; Plain vectors (e.g. native raw-tables) use Gambit's convention where
+  ;; index 0 = type tag, fields at 1+, so vector-ref with no adjustment.
+  ;; Gerbil-structs store fields in field-vec starting at 0, so subtract 1.
   (define |##unchecked-structure-ref|
     (case-lambda
       ((obj field-index)
-       (vector-ref (gerbil-struct-field-vec obj) (fx- field-index 1)))
+       (if (gerbil-struct? obj)
+         (vector-ref (gerbil-struct-field-vec obj) (fx- field-index 1))
+         (vector-ref obj field-index)))
       ((obj field-index type-desc slot-name)
-       (vector-ref (gerbil-struct-field-vec obj) (fx- field-index 1)))))
+       (if (gerbil-struct? obj)
+         (vector-ref (gerbil-struct-field-vec obj) (fx- field-index 1))
+         (vector-ref obj field-index)))))
 
   (define |##unchecked-structure-set!|
     (case-lambda
       ((obj field-index val)
-       (vector-set! (gerbil-struct-field-vec obj) (fx- field-index 1) val))
+       (if (gerbil-struct? obj)
+         (vector-set! (gerbil-struct-field-vec obj) (fx- field-index 1) val)
+         (vector-set! obj field-index val)))
       ((obj val field-index type-desc slot-name)
-       (vector-set! (gerbil-struct-field-vec obj) (fx- field-index 1) val))))
+       (if (gerbil-struct? obj)
+         (vector-set! (gerbil-struct-field-vec obj) (fx- field-index 1) val)
+         (vector-set! obj field-index val)))))
 
   ;; (|##structure-instance-of?| obj type-id)
   ;; Checks if obj is a structure whose type (or any ancestor type) has the
@@ -310,7 +329,9 @@
   ;; (|##structure-length| obj)
   ;; Total length including type slot (Gambit convention).
   (define (|##structure-length| obj)
-    (fx+ 1 (vector-length (gerbil-struct-field-vec obj))))
+    (if (gerbil-struct? obj)
+      (fx+ 1 (vector-length (gerbil-struct-field-vec obj)))
+      (vector-length obj)))
 
   ;; (|##structure-copy| obj)
   ;; Shallow copy of a gerbil structure.

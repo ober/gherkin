@@ -31,15 +31,20 @@
     gc-table-length
     ;; raw-table-for-each is also used by control.ss for keyword-rest
     raw-table-for-each
+    ;; sentinel values (for sharing with compiled bootstrap code)
+    *unused* *deleted*
     )
 
   (import
     (except (chezscheme) void box box? unbox set-box! string-hash)
-    (compat gambit-compat))
+    (compat gambit-compat)
+    (only (compat types) gerbil-struct? gerbil-struct-field-vec))
 
   ;; --- Sentinel objects for open-addressing tables ---
-  (define *unused* (gensym "unused"))
-  (define *deleted* (gensym "deleted"))
+  ;; MUST use the same objects as gambit-compat's macro-unused-obj/macro-deleted-obj
+  ;; so compiled Gerbil code and our probe loops agree on sentinels.
+  (define *unused* (macro-unused-obj))
+  (define *deleted* (macro-deleted-obj))
 
   ;; Type tags
   (define __table::t (string->symbol "gerbil#__table::t"))
@@ -47,23 +52,57 @@
 
   ;; --- Raw table: vector-based open addressing with quadratic probing ---
   ;; Layout: #(tag table-vec count free hash-fn test-fn seed)
+  ;; Also supports gerbil-struct wrapped tables (from compiled bootstrap code)
+  ;; where the field-vec has layout #(table-vec count free hash test seed)
   (define (make-raw-table-struct vec count free hash test seed)
     (vector 'raw-table vec count free hash test seed))
 
   (define (raw-table? x)
-    (and (vector? x) (fx>= (vector-length x) 7)
-         (eq? (vector-ref x 0) 'raw-table)))
+    (or (and (vector? x) (fx>= (vector-length x) 7)
+             (eq? (vector-ref x 0) 'raw-table))
+        ;; Also recognize gerbil-struct wrapped tables from compiled bootstrap
+        (and (gerbil-struct? x)
+             (let ([fv (gerbil-struct-field-vec x)])
+               (and (vector? fv) (fx>= (vector-length fv) 6)
+                    (vector? (vector-ref fv 0)))))))
 
-  (define (rt-table t)  (vector-ref t 1))
-  (define (rt-count t)  (vector-ref t 2))
-  (define (rt-free t)   (vector-ref t 3))
-  (define (rt-hash t)   (vector-ref t 4))
-  (define (rt-test t)   (vector-ref t 5))
-  (define (rt-seed t)   (vector-ref t 6))
+  ;; Unwrap a table: returns the backing vector for field access.
+  ;; For native raw-tables, returns the table itself.
+  ;; For gerbil-struct tables, returns a shifted view via the field-vec.
+  (define (rt-unwrap t)
+    (if (gerbil-struct? t)
+      (gerbil-struct-field-vec t)
+      t))
 
-  (define (rt-table-set! t v)  (vector-set! t 1 v))
-  (define (rt-count-set! t v)  (vector-set! t 2 v))
-  (define (rt-free-set! t v)   (vector-set! t 3 v))
+  ;; For gerbil-struct tables, field-vec indices are shifted by -1 compared to raw-table
+  (define (rt-table t)
+    (let ([u (rt-unwrap t)])
+      (if (eq? u t) (vector-ref t 1) (vector-ref u 0))))
+  (define (rt-count t)
+    (let ([u (rt-unwrap t)])
+      (if (eq? u t) (vector-ref t 2) (vector-ref u 1))))
+  (define (rt-free t)
+    (let ([u (rt-unwrap t)])
+      (if (eq? u t) (vector-ref t 3) (vector-ref u 2))))
+  (define (rt-hash t)
+    (let ([u (rt-unwrap t)])
+      (if (eq? u t) (vector-ref t 4) (vector-ref u 3))))
+  (define (rt-test t)
+    (let ([u (rt-unwrap t)])
+      (if (eq? u t) (vector-ref t 5) (vector-ref u 4))))
+  (define (rt-seed t)
+    (let ([u (rt-unwrap t)])
+      (if (eq? u t) (vector-ref t 6) (vector-ref u 5))))
+
+  (define (rt-table-set! t v)
+    (let ([u (rt-unwrap t)])
+      (if (eq? u t) (vector-set! t 1 v) (vector-set! u 0 v))))
+  (define (rt-count-set! t v)
+    (let ([u (rt-unwrap t)])
+      (if (eq? u t) (vector-set! t 2 v) (vector-set! u 1 v))))
+  (define (rt-free-set! t v)
+    (let ([u (rt-unwrap t)])
+      (if (eq? u t) (vector-set! t 3 v) (vector-set! u 2 v))))
 
   (define &raw-table-count rt-count)
 
