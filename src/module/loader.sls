@@ -467,6 +467,24 @@
                (loop (cdr forms) (cons form result))]))))))
 
   ;; ============================================================
+  ;; Utilities
+  ;; ============================================================
+
+  (define (string-replace str old new)
+    (let ([slen (string-length str)]
+          [olen (string-length old)])
+      (let loop ([i 0] [result '()])
+        (cond
+          [(> (+ i olen) slen)
+           (apply string-append
+             (reverse (cons (substring str i slen) result)))]
+          [(string=? (substring str i (+ i olen)) old)
+           (loop (+ i olen) (cons new result))]
+          [else
+           (loop (+ i 1)
+                 (cons (string (string-ref str i)) result))]))))
+
+  ;; ============================================================
   ;; Module caching
   ;; ============================================================
 
@@ -522,8 +540,8 @@
 
   (define (compile-and-load-module mod-id source-path)
     "Compile a Gerbil source file and evaluate it.
-     Follows the same pattern as the test harness: strip annotations,
-     pre-register defrules/defrule, compile, write, eval.
+     Streaming design: compiles and writes each form immediately to disk,
+     then reads back for eval. Avoids holding all compiled forms in memory.
      Uses cache if available and source hasn't changed."
     ;; Try cache first
     (if (cache-valid? mod-id source-path)
@@ -546,89 +564,69 @@
                              (strip-annotations (annotated-datum-value f))
                              (strip-annotations f)))
                          forms)]
-           ;; Pre-pass: register defrules/defrule for compile-time expansion
-           [_ (parameterize ([*current-source-dir* source-dir])
-                (for-each
-                  (lambda (form)
-                    (when (and (pair? form) (memq (car form) '(defrules defrule)))
-                      (guard (exn [#t (void)])
-                        (gerbil-compile-top form))))
-                  stripped))]
-           ;; Compile, skipping import/export and empty begins
-           [compiled
-            (parameterize ([*current-source-dir* source-dir])
-              (let loop ([forms stripped] [result '()])
-                (if (null? forms)
-                  (reverse result)
-                  (let ([form (car forms)])
-                    (guard (exn [#t
-                      (loop (cdr forms) result)])
-                      (let ([c (gerbil-compile-top form)])
-                        (cond
-                          [(and (pair? c) (memq (car c) '(import export)))
-                           (loop (cdr forms) result)]
-                          [(equal? c '(begin))
-                           (loop (cdr forms) result)]
-                          [else
-                           (loop (cdr forms) (cons c result))])))))))]
+           [out-path (string-append *output-dir*
+                       (string-replace mod-id "/" "_") ".ss")]
+           [form-count 0]
            [error-count 0])
 
-      ;; Write compiled output
-      (let ([out-path (string-append *output-dir*
-                        (string-replace mod-id "/" "_") ".ss")])
-        (when (file-exists? out-path) (delete-file out-path))
-        (call-with-output-file out-path
-          (lambda (port)
+      ;; Pre-pass: register defrules/defrule for compile-time expansion
+      (parameterize ([*current-source-dir* source-dir])
+        (for-each
+          (lambda (form)
+            (when (and (pair? form) (memq (car form) '(defrules defrule)))
+              (guard (exn [#t (void)])
+                (gerbil-compile-top form))))
+          stripped))
+
+      ;; Streaming compile: compile each form and write immediately to disk
+      (when (file-exists? out-path) (delete-file out-path))
+      (call-with-output-file out-path
+        (lambda (port)
+          (parameterize ([*current-source-dir* source-dir])
             (for-each
               (lambda (form)
-                (pretty-print (sanitize-compiled form) port)
-                (newline port))
-              compiled))
-          'replace)
+                (guard (exn [#t (void)])
+                  (let ([c (gerbil-compile-top form)])
+                    (unless (or (and (pair? c) (memq (car c) '(import export)))
+                                (equal? c '(begin)))
+                      (pretty-print (sanitize-compiled c) port)
+                      (newline port)
+                      (set! form-count (+ form-count 1))))))
+              stripped)))
+        'replace)
 
-        ;; Evaluate form-by-form
-        (let ([in-port (open-input-file out-path)])
-          (let eval-loop ()
-            (let ([form (read in-port)])
-              (unless (eof-object? form)
-                (if (and (pair? form) (memq (car form) '(import export)))
-                  (eval-loop)
-                  (begin
-                    (guard (exn [#t
-                      (set! error-count (+ error-count 1))
-                      (when *verbose*
-                        (printf "    eval error: ~a~n"
-                                (if (message-condition? exn)
-                                  (condition-message exn)
-                                  exn)))])
-                      (eval form))
-                    (eval-loop))))))
-          (close-input-port in-port)
+      ;; Force GC to release source/compiled forms before eval phase
+      (collect)
 
-          (when *verbose*
-            (printf "  ~a: ~a forms compiled, ~a eval errors~n"
-                    mod-id (length compiled) error-count))
+      ;; Evaluate form-by-form from disk
+      (let ([in-port (open-input-file out-path)])
+        (let eval-loop ()
+          (let ([form (read in-port)])
+            (unless (eof-object? form)
+              (if (and (pair? form) (memq (car form) '(import export)))
+                (eval-loop)
+                (begin
+                  (guard (exn [#t
+                    (set! error-count (+ error-count 1))
+                    (when *verbose*
+                      (printf "    eval error: ~a~n"
+                              (if (message-condition? exn)
+                                (condition-message exn)
+                                exn)))])
+                    (eval form))
+                  (eval-loop))))))
+        (close-input-port in-port)
 
-          ;; Consider it loaded even with eval errors
-          ;; (many are expected define-syntax failures)
-          (hashtable-set! *module-registry* mod-id #t)
-          ;; Force GC after compilation to keep memory under control
-          (collect)
-          (values (length compiled) error-count)))))))
+        (when *verbose*
+          (printf "  ~a: ~a forms compiled, ~a eval errors~n"
+                  mod-id form-count error-count))
 
-  (define (string-replace str old new)
-    (let ([slen (string-length str)]
-          [olen (string-length old)])
-      (let loop ([i 0] [result '()])
-        (cond
-          [(> (+ i olen) slen)
-           (apply string-append
-             (reverse (cons (substring str i slen) result)))]
-          [(string=? (substring str i (+ i olen)) old)
-           (loop (+ i olen) (cons new result))]
-          [else
-           (loop (+ i 1)
-                 (cons (string (string-ref str i)) result))]))))
+        ;; Consider it loaded even with eval errors
+        ;; (many are expected define-syntax failures)
+        (hashtable-set! *module-registry* mod-id #t)
+        ;; Force GC after compilation to keep memory under control
+        (collect)
+        (values form-count error-count))))))
 
   ;; ============================================================
   ;; Main entry point: load module with dependency resolution

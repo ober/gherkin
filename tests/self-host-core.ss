@@ -2762,7 +2762,8 @@
     ":std/values" ":std/format" ":std/pregexp"
     ":std/lazy" ":std/contract" ":std/deprecation"
     ":std/hash-table" ":std/stxutil"
-    ":std/source" ":std/generic" ":std/amb" ":std/assert"))
+    ":std/source" ":std/generic" ":std/amb" ":std/assert"
+    ":std/cli/getopt" ":std/instance" ":std/config"))
 
 (for-each (lambda (mod)
   (check (string-append "load " mod)
