@@ -13,7 +13,7 @@ TEST_FILES = tests/test-compat.ss \
              tests/test-threading.ss \
              tests/test-reader.ss
 
-.PHONY: all test clean compile
+.PHONY: all test clean compile self-host-test bootstrap regenerate
 
 all: compile
 
@@ -54,6 +54,17 @@ clean:
 	find src -name "*.wpo" -delete
 	find tests -name "*.so" -delete
 	@echo "Cleaned."
+
+self-host-test: compile
+	@echo "Running self-host tests..."
+	@$(SCHEME) -q --libdirs .:src --program tests/self-host-core.ss
+
+bootstrap:
+	@echo "Generating bootstrap artifacts..."
+	@$(SCHEME) -q --libdirs .:src --program scripts/generate-bootstrap.ss
+
+regenerate: bootstrap
+	@echo "Bootstrap regeneration complete."
 
 loc:
 	@wc -l $(SLS_FILES) $(TEST_FILES) 2>/dev/null || true

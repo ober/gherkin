@@ -1,0 +1,22 @@
+(begin
+  (define car-set! set-car!)
+  (define cdr-set! set-cdr!)
+  (define box-set! set-box!)
+  (define string-ref-set! string-set!)
+  (define vector-ref-set! vector-set!)
+  (define s8vector-ref-set! s8vector-set!)
+  (define u8vector-ref-set! u8vector-set!)
+  (define s16vector-ref-set! s16vector-set!)
+  (define u16vector-ref-set! u16vector-set!)
+  (define s32vector-ref-set! s32vector-set!)
+  (define u32vector-ref-set! u32vector-set!)
+  (define s64vector-ref-set! s64vector-set!)
+  (define u64vector-ref-set! u64vector-set!)
+  (define f32vector-ref-set! f32vector-set!)
+  (define f64vector-ref-set! f64vector-set!)
+  (define call/values call-with-values)
+  (define call/parameters call-with-parameters)
+  (define random-bytes random-u8vector)
+  (define random-source-make-bytes
+    random-source-make-u8vectors))
+

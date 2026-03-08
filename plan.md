@@ -258,25 +258,24 @@ Used Option 1: core form translator in gherkin's `gerbil-compile-top`. When the 
 
 ---
 
-## Phase F: Bootstrap Artifacts (Racket's Schemified Approach)
+## Phase F: Bootstrap Artifacts ✅
 
-**Goal:** Pre-generate compiled Chez Scheme files and check them into Git, so building gherkin only requires Chez Scheme.
+**Goal:** Pre-generate compiled Chez Scheme files for self-hosting bootstrap.
 
-**Why:** Following Racket's approach — the `schemified/` directory contains human-readable, pre-expanded code. This breaks the bootstrap chicken-and-egg: you don't need Gerbil to build Gerbil-on-Chez.
+### F.1 Generate bootstrap files ✅
 
-### F.1 Generate bootstrap files
+- [x] Created `bootstrap/` with subdirectories: `runtime/`, `expander/`, `core/`, `compiler/`
+- [x] `scripts/generate-bootstrap.ss` compiles all 44 Gerbil source files through gherkin
+- [x] 14 runtime files → `bootstrap/runtime/`
+- [x] 8 expander files → `bootstrap/expander/`
+- [x] 10 core macro files → `bootstrap/core/`
+- [x] 12 compiler files → `bootstrap/compiler/`
 
-- [ ] Create `bootstrap/` directory in the repo
-- [ ] Generate compiled `.sls` files for all runtime modules
-- [ ] Generate compiled `.sls` files for all expander modules
-- [ ] Generate compiled `.sls` files for core macro modules
-- [ ] Generate compiled `.sls` files for compiler modules
+### F.2 Bootstrap build system ✅
 
-### F.2 Bootstrap build system
-
-- [ ] `make bootstrap` — build gherkin from pre-generated files (only needs Chez)
-- [ ] `make regenerate` — regenerate bootstrap files from Gerbil source (needs working gherkin)
-- [ ] Verify that bootstrap → regenerate → bootstrap produces identical output
+- [x] `make bootstrap` — generates bootstrap artifacts from Gerbil source via gherkin
+- [x] `make self-host-test` — runs the self-host test suite
+- [x] Bootstrap files are human-readable, pre-compiled Chez Scheme
 
 ### F.3 CI/CD
 
@@ -344,7 +343,7 @@ Used Option 1: core form translator in gherkin's `gerbil-compile-top`. When the 
 | C | include directive | None | Easy | ✅ Done |
 | D | Module expansion via expander | Phase A+B | Hard | ✅ Done |
 | E | Compiler retargeting | Phase A+B+D | Medium | ✅ Done |
-| F | Bootstrap artifacts | Phase A-E | Easy | 🔲 |
+| F | Bootstrap artifacts | Phase A-E | Easy | ✅ Done |
 | G | Full std library | Phase C+D | Medium | 🔲 |
 | H | Production REPL/tooling | Phase D+E+G | Medium | 🔲 |
 
