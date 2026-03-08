@@ -90,14 +90,14 @@
     (and (char? ch)
          (or (char-alphabetic? ch)
              (memv ch '(#\! #\$ #\% #\& #\* #\/ #\: #\< #\= #\> #\? #\^ #\_ #\~
-                        #\+ #\- #\.)))))
+                        #\+ #\- #\. #\@)))))
 
   (define (subsequent-ident? ch)
     (and (char? ch)
          (or (char-alphabetic? ch)
              (char-numeric? ch)
              (memv ch '(#\! #\$ #\% #\& #\* #\/ #\: #\< #\= #\> #\? #\^ #\_ #\~
-                        #\+ #\- #\. #\@)))))
+                        #\+ #\- #\. #\@ #\#)))))
 
   ;;;; Comment skipping
 
@@ -419,6 +419,64 @@
            (let ((sym (string->symbol (string-append "##" (symbol->string name)))))
              (annotate rs sym loc))))
 
+        ;; #% core forms (Gerbil expander primitives)
+        ((char=? ch #\%)
+         (reader-next! rs)
+         (let ((name (read-symbol-chars rs #f)))
+           (let ((sym (string->symbol (string-append "#%" (symbol->string name)))))
+             (annotate rs sym loc))))
+
+        ;; #< heredoc string (#<<DELIM ... DELIM)
+        ((char=? ch #\<)
+         (reader-next! rs)
+         (let ((ch2 (reader-peek rs)))
+           (if (and (char? ch2) (char=? ch2 #\<))
+             (begin
+               (reader-next! rs)
+               ;; Read delimiter word
+               (let ((delim (let dloop ((chars '()))
+                              (let ((c (reader-peek rs)))
+                                (cond
+                                  ((or (eof-object? c) (char=? c #\newline) (char=? c #\return))
+                                   (when (and (char? c) (or (char=? c #\newline) (char=? c #\return)))
+                                     (reader-next! rs)
+                                     ;; consume \r\n pair
+                                     (when (char=? c #\return)
+                                       (let ((c2 (reader-peek rs)))
+                                         (when (and (char? c2) (char=? c2 #\newline))
+                                           (reader-next! rs)))))
+                                   (list->string (reverse chars)))
+                                  (else
+                                   (reader-next! rs)
+                                   (dloop (cons c chars))))))))
+                 ;; Read lines until we find the delimiter alone on a line
+                 (let hloop ((lines '()))
+                   (let lloop ((chars '()))
+                     (let ((c (reader-next! rs)))
+                       (cond
+                         ((eof-object? c)
+                          (error 'gerbil-read "unterminated heredoc"))
+                         ((or (char=? c #\newline) (char=? c #\return))
+                          ;; consume \r\n pair
+                          (when (char=? c #\return)
+                            (let ((c2 (reader-peek rs)))
+                              (when (and (char? c2) (char=? c2 #\newline))
+                                (reader-next! rs))))
+                          (let ((line (list->string (reverse chars))))
+                            (if (string=? line delim)
+                              (annotate rs
+                                (let ((all (reverse lines)))
+                                  (if (null? all) ""
+                                    (let lp ((strs all) (acc (car all)))
+                                      (if (null? (cdr strs)) acc
+                                        (lp (cdr strs)
+                                            (string-append acc "\n" (cadr strs)))))))
+                                loc)
+                              (hloop (cons line lines)))))
+                         (else
+                          (lloop (cons c chars)))))))))
+             (error 'gerbil-read "invalid # dispatch" ch))))
+
         (else
          (error 'gerbil-read "invalid # dispatch" ch)))))
 
@@ -554,7 +612,8 @@
           ((or (eof-object? ch) (delimiter? ch))
            (let ((s (list->string (reverse chars))))
              (or (string->number s)
-                 (error 'gerbil-read "invalid number" s))))
+                 ;; Fall back to symbol for identifiers like 1+ 1-
+                 (string->symbol s))))
           (else
            (reader-next! rs)
            (loop (cons ch chars)))))))

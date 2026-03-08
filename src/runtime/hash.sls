@@ -114,10 +114,24 @@
            (else (loop (cdr args) test size)))))))
 
   ;; make-hash-table-eq uses eq? comparison (fast for symbols)
-  (define make-hash-table-eq
-    (case-lambda
-      (() (wrap-hash-table (make-gc-table) 'gc))
-      ((size-hint) (wrap-hash-table (make-gc-table size-hint) 'gc))))
+  ;; Accepts and ignores keyword args like weak-keys: for Gerbil compatibility
+  (define (make-hash-table-eq . args)
+    (let loop ((args args) (size #f))
+      (cond
+        ((null? args) (if size
+                        (wrap-hash-table (make-gc-table size) 'gc)
+                        (wrap-hash-table (make-gc-table) 'gc)))
+        ((and (symbol? (car args))
+              (let ((s (symbol->string (car args))))
+                (and (> (string-length s) 0)
+                     (char=? (string-ref s (- (string-length s) 1)) #\:))))
+         ;; keyword arg like weak-keys: — skip it and its value
+         (if (pair? (cdr args))
+           (loop (cddr args) size)
+           (loop (cdr args) size)))
+        ((number? (car args))
+         (loop (cdr args) (car args)))
+        (else (loop (cdr args) size)))))
 
   (define make-hash-table-eqv
     (case-lambda

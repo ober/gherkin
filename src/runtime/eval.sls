@@ -197,8 +197,12 @@
   (define (__core-resolve id)
     (hash-get __core id))
 
-  (define (__core-bind-syntax! id expander)
-    (hash-put! __core id expander))
+  ;; Accept optional maker arg from defcore-forms (maker wraps expander in class instance)
+  ;; During bootstrap we just store the expander directly
+  (define __core-bind-syntax!
+    (case-lambda
+      ((id expander) (hash-put! __core id expander))
+      ((id expander maker) (hash-put! __core id expander))))
 
   (define (__core-bound-id? id)
     (hash-key? __core id))

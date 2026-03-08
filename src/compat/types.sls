@@ -52,6 +52,14 @@
     set-type-descriptor-constructor!
     set-type-descriptor-methods!
 
+    ;; Gerbil struct record type
+    gerbil-struct?
+    make-gerbil-struct
+    gerbil-struct-type-tag
+    gerbil-struct-type-tag-set!
+    gerbil-struct-field-vec
+    gerbil-struct-field-vec-set!
+
     ;; Gambit |##structure| API
     |##structure|
     |##structure?|
@@ -319,8 +327,27 @@
   ;;;; In Gambit, |##type-id| is (|##structure-ref| td 1 |##type-type| 'id),
   ;;;; which maps to field-vec[0] in our system.
 
-  (define (|##type-type| td)
-    (gerbil-struct-type-tag td))
+  ;; ##type-type is the metatype — a type descriptor whose type is itself.
+  ;; In Gambit, ##type-type is both a type descriptor and used as a value
+  ;; in (##structure ##type-type ...) to create type descriptors.
+  ;; Its id is '##type and its fields describe the 6 fields of a basic type.
+  (define |##type-type|
+    (let ([fv (make-vector type-field-count)])
+      (vector-set! fv type-id-index '|##type|)
+      (vector-set! fv type-name-index 'type)
+      (vector-set! fv type-flags-index 0)
+      (vector-set! fv type-super-index #f)
+      (vector-set! fv type-fields-index '#(id 0 #f name 0 #f flags 0 #f super 0 #f fields 0 #f))
+      (vector-set! fv type-plist-index #f)
+      (vector-set! fv type-slot-vec-index #f)
+      (vector-set! fv type-slot-tab-index #f)
+      (vector-set! fv type-props-index #f)
+      (vector-set! fv type-ctor-index #f)
+      (vector-set! fv type-methods-index #f)
+      (let ([td (make-gerbil-struct #f fv)])
+        ;; Self-referential: the metatype's type is itself
+        (gerbil-struct-type-tag-set! td td)
+        td)))
 
   (define (|##type-id| td)
     (type-descriptor-id td))

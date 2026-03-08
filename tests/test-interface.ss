@@ -169,8 +169,12 @@
   ;; Collect all defined names
   (let ((all-names '()))
     (for-each (lambda (f)
-                (when (and (pair? f) (eq? (car f) 'define) (pair? (cadr f)))
-                  (set! all-names (cons (caadr f) all-names))))
+                (when (and (pair? f) (eq? (car f) 'define))
+                  (cond
+                    [(pair? (cadr f))
+                     (set! all-names (cons (caadr f) all-names))]
+                    [(symbol? (cadr f))
+                     (set! all-names (cons (cadr f) all-names))])))
               (if (eq? (car compiled) 'begin) (cdr compiled) (list compiled)))
     (test-assert "interface-out would export make-Sizable"
       (memq 'make-Sizable all-names))

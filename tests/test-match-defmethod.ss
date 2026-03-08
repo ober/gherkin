@@ -220,18 +220,20 @@
     (eval '(call-method w 'render "screen") env)))
 
 ;; Test defmethod with @method form still works
+;; @method now emits (begin (define ...) (bind-method! ...))
 (let ((compiled (gherkin-compile-form
                   '(defmethod (@method render Widget)
                      (lambda (self buf) (display buf))))))
   (test-assert "defmethod @method form"
-    (and (pair? compiled) (eq? (car compiled) 'method-set!))))
+    (and (pair? compiled) (eq? (car compiled) 'begin))))
 
 ;; Test defmethod with => return type annotation
+;; Standard form emits bind-method! directly
 (let ((compiled (gherkin-compile-form
                   '(defmethod (greet (self Widget) name) => :string
                      (string-append "Hello, " name)))))
   (test-assert "defmethod with => annotation"
-    (and (pair? compiled) (eq? (car compiled) 'method-set!))))
+    (and (pair? compiled) (eq? (car compiled) 'bind-method!))))
 
 (test-end)
 (let-values (((p f) (test-stats)))

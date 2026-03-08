@@ -7,11 +7,11 @@
 (library (compat gambit-compat)
   (export
     ;; Special values
-    void void?
-    absent-obj absent-obj?
-    unbound-obj unbound-obj?
-    deleted-obj deleted-obj?
-    unused-obj unused-obj?
+    void void? |%%void|
+    absent-obj absent-obj? |%%absent|
+    unbound-obj unbound-obj? |%%unbound|
+    deleted-obj deleted-obj? |%%deleted|
+    unused-obj unused-obj? |%%unused| |%%eof|
 
     ;; Fixnum operations (## → Chez fx)
     |##fx+| |##fx-| |##fx*| |##fx/| |##fxmodulo| |##fxremainder|
@@ -131,6 +131,128 @@
     ;; Property lists
     |##putprop| |##getprop| |##remprop|
 
+    ;; Structure/type primitives — provided by (compat types)
+    ;; Only extras not in types.sls:
+    |##direct-structure-ref| |##direct-structure-set!|
+    |##make-structure|
+    |##type?| |##type-cast|
+    |##subtype| |##subtyped?|
+
+    ;; Additional primitives for runtime
+    |##absent-object|
+    |##cadr| |##memq| |##last-pair|
+    |##closure?| |##mem-allocated?|
+    |##keyword-hash| |##symbol-hash|
+    keyword? keyword-hash
+    string->keyword keyword->string
+    uninterned-keyword?
+    string->uninterned-keyword
+    |##string| |##substring-move!|
+    |##parameterize1|
+    |##make-delay-promise| |##force-out-of-line|
+    |##thread-yield!| |##thread-end-with-uncaught-exception!|
+    |##primordial-exception-handler| |##primordial-thread|
+    |##primordial-exception-handler-hook-set!|
+    |##repl-exception-handler-hook|
+    |##display-exception-hook-set!|
+    |##default-display-exception|
+    |##display-exception-in-context|
+    |##repl| |##repl-within|
+    |##continuation-next| |##continuation-last|
+    |##write-string| |##read-subu8vector| |##write-subu8vector|
+    |##u16vector-ref|
+    |##stderr-port| |##stdin-port| |##stdout-port| |##console-port|
+    |##file-exists?|
+    |##current-time-point|
+    |##values?| |##values-length| |##values-ref|
+    |##script-marker|
+    |##source?| |##source-code| |##source-locat| |##sourcify| |##make-source|
+    |##locat?| |##locat-container|
+    |##c-code|
+
+    ;; Gambit runtime functions needed by compiled Gerbil code
+    ;; Note: rename-file is NOT exported (conflicts with chezscheme)
+    ;; Use gambit-rename-file if you need 3-arg version
+    gambit-rename-file
+    gambit-path-expand gambit-path-normalize
+    gambit-create-symbolic-link
+    gambit-file-info gambit-file-info-type gambit-file-info?
+    make-condition-variable condition-variable-signal! condition-variable-broadcast!
+    make-will will-testator will?
+    configure-command-string system-version-string
+    object->serial-number
+
+    ;; Gambit macro-* constants and accessors
+    macro-absent-obj macro-deleted-obj macro-unused-obj
+    macro-max-fixnum32
+    macro-gc-hash-table-flags
+    macro-gc-hash-table-flag-need-rehash
+    macro-gc-hash-table-flag-mem-alloc-keys
+    macro-gc-hash-table-flag-weak-keys
+    macro-gc-hash-table-count macro-gc-hash-table-count-set!
+    macro-gc-hash-table-free macro-gc-hash-table-free-set!
+    macro-gc-hash-table-size macro-gc-hash-table-key0
+    macro-subtype-structure macro-subtype-boxvalues macro-subtype-vector
+    macro-subtype-pair macro-subtype-ratnum macro-subtype-cpxnum
+    macro-subtype-symbol macro-subtype-keyword macro-subtype-frame
+    macro-subtype-continuation macro-subtype-promise macro-subtype-weak
+    macro-subtype-procedure macro-subtype-return macro-subtype-foreign
+    macro-subtype-string
+    macro-subtype-s8vector macro-subtype-u8vector
+    macro-subtype-s16vector macro-subtype-u16vector
+    macro-subtype-s32vector macro-subtype-u32vector
+    macro-subtype-f32vector
+    macro-subtype-s64vector macro-subtype-u64vector
+    macro-subtype-f64vector
+    macro-subtype-flonum macro-subtype-bignum
+    macro-type-fixnum macro-type-mem1 macro-type-mem2 macro-type-subtyped
+    macro-type-table macro-type-time macro-type-mutex macro-type-condvar
+    macro-type-thread macro-type-tgroup macro-type-port
+    macro-type-object-port macro-type-character-port
+    macro-type-byte-port macro-type-device-port macro-type-vector-port
+    macro-type-string-port macro-type-u8vector-port
+    macro-type-raw-device-port macro-type-tcp-server-port
+    macro-type-udp-port macro-type-directory-port
+    macro-type-event-queue-port
+    macro-type-readenv macro-type-writeenv macro-type-readtable
+    macro-type-processor macro-type-vm
+    macro-type-file-info macro-type-socket-info macro-type-address-info
+    macro-number-dispatch
+    macro-ratnum-numerator macro-ratnum-denominator
+    macro-cpxnum-real macro-cpxnum-imag
+    macro-writeenv-style
+    macro-readenv-port macro-readenv-filepos
+    macro-readenv-script-line-set!
+    macro-readtable-write-extended-read-macros?-set!
+    macro-readtable-bracket-handler-set!
+    macro-readtable-brace-handler-set!
+    macro-exception?
+    macro-character-port? macro-character-port-wchars
+    macro-character-port-output-width macro-character-port-output-width-set!
+    macro-mutex-lock! macro-mutex-unlock!
+    macro-current-thread
+
+    ;; GC hash table primitives
+    |##gc-hash-table-allocate| |##gc-hash-table-ref| |##gc-hash-table-set!|
+    |##gc-hash-table-rehash!| |##gc-hash-table-resize!|
+    |##gc-hash-table-for-each|
+
+    ;; Readtable / reader internals
+    |##main-readtable-set!| |##make-standard-readtable|
+    |##readtable-char-sharp-handler-set!| |##readtable-setup-for-language!|
+    |##make-readenv| |##read-datum-or-eof|
+    |##read-all-as-a-begin-expr-from-path| |##read-sharp-bang|
+    |##read-line|
+
+    ;; Eval/compile internals
+    |##eval-top| |##load| |##interaction-cte|
+    |##expand-source-set!| |##form-size|
+    |##make-macro-descr| |##macro-descr| |##macro-descr-set!|
+    |##default-user-interrupt-handler|
+    |##set-parallelism-level!| |##startup-parallelism!|
+    |##wr-set!|
+    |##lambda|
+
     ;; Gambit threading API → Chez threading
     thread-sleep! make-thread thread-start! thread-join!
     thread-yield!
@@ -149,7 +271,10 @@
   (import (except (chezscheme)
             void                       ;; we define our own void
             box box? unbox set-box!    ;; we define our own box type
-            ))
+            )
+          (rename (only (chezscheme) make-condition)
+                  (make-condition chez:make-condition))
+          (only (compat types) type-descriptor? gerbil-struct? gerbil-struct-field-vec))
 
   ;;;; Special values
   ;;;; Gambit uses unique objects for void, absent, etc.
@@ -168,6 +293,13 @@
 
   (define (void) void-obj)
   (define (void? x) (eq? x void-obj))
+  ;; Internal names for special values, avoid recursion when compiled code redefines them
+  (define (|%%void|) void-obj)
+  (define (|%%eof|) (eof-object))
+  (define (|%%absent|) absent)
+  (define (|%%unbound|) unbound)
+  (define (|%%deleted|) deleted)
+  (define (|%%unused|) unused)
   (define (absent-obj) absent)
   (define (absent-obj? x) (eq? x absent))
   (define (unbound-obj) unbound)
@@ -265,7 +397,13 @@
   (define |##vector-ref| vector-ref)
   (define |##vector-set!| vector-set!)
   (define |##vector-length| vector-length)
-  (define |##vector-cas!| vector-cas!)
+  ;; Gambit ##vector-cas! returns the OLD value (not boolean like Chez vector-cas!)
+  ;; Args: (##vector-cas! vec idx old-val new-val) → old-value-at-idx
+  (define (|##vector-cas!| vec idx old-val new-val)
+    (let ([current (vector-ref vec idx)])
+      (if (eq? current old-val)
+        (begin (vector-set! vec idx new-val) old-val)
+        current)))
   (define |##make-vector| make-vector)
   (define |##vector?| vector?)
   (define (|##vector-copy| v)
@@ -829,5 +967,543 @@
 
   (define (f64vector-length bv)
     (fx/ (bytevector-length bv) 8))
+
+  ;;;; ==================================================================
+  ;;;; Structure/Type system extras
+  ;;;; Most structure/type ops are in (compat types). Only extras here.
+  ;;;; ==================================================================
+
+  ;; ##direct-structure-ref/set! — same semantics as unchecked variants
+  (define (|##direct-structure-ref| obj i type proc)
+    (vector-ref obj (+ i 1)))
+
+  (define (|##direct-structure-set!| obj val i type proc)
+    (vector-set! obj (+ i 1) val))
+
+  ;; ##make-structure — create structure with type and n fields
+  (define (|##make-structure| type-desc n . fill)
+    (let* ([f (if (null? fill) 0 (car fill))]
+           [v (make-vector (+ n 1) f)])
+      (vector-set! v 0 type-desc)
+      (putprop v 'gherkin-instance #t)
+      v))
+
+  ;; ##type? — check if obj is a type descriptor
+  ;; Recognizes gerbil-struct type descriptors (both basic 5-field and full 11-field)
+  ;; and old vector-based types
+  (define (|##type?| obj)
+    (or (type-descriptor? obj)
+        (and (gerbil-struct? obj)
+             (let ([fv (gerbil-struct-field-vec obj)])
+               (and (vector? fv)
+                    (>= (vector-length fv) 5)
+                    (symbol? (vector-ref fv 0))))) ;; id field
+        (and (vector? obj)
+             (>= (vector-length obj) 6)
+             (getprop obj 'gherkin-instance))))
+
+  (define (|##type-cast| obj type) obj) ;; no-op for Chez
+
+  (define (|##subtype| obj) 0)    ;; Gambit internal tag — stub
+  (define (|##subtyped?| obj)     ;; everything except fixnum/char/special
+    (or (vector? obj) (string? obj) (pair? obj) (symbol? obj)
+        (bytevector? obj) (procedure? obj) (port? obj)))
+
+  ;;;; Additional list/pair primitives
+  (define (|##cadr| x) (cadr x))
+  (define (|##memq| obj lst) (memq obj lst))
+  (define (|##last-pair| lst)
+    (if (pair? (cdr lst))
+        (|##last-pair| (cdr lst))
+        lst))
+
+  ;;;; Closures and allocation
+  (define (|##closure?| obj) (procedure? obj))
+  (define (|##mem-allocated?| obj)
+    (not (or (fixnum? obj) (char? obj) (boolean? obj) (null? obj)
+             (eq? obj void-obj))))
+
+  ;;;; Keyword and symbol hashing
+  (define (|##keyword-hash| kw)
+    (if (keyword-object? kw)
+        (string-hash (keyword-object-name kw))
+        (equal-hash kw)))
+
+  ;; ##symbol-hash must handle keyword objects too (used by symbolic-hash in table.ss)
+  (define (|##symbol-hash| obj)
+    (if (|##keyword?| obj)
+      (symbol-hash (string->symbol (|##keyword->string| obj)))
+      (symbol-hash obj)))
+
+  ;; Bare keyword/symbol functions for Gerbil runtime
+  (define keyword? |##keyword?|)
+  (define keyword-hash |##keyword-hash|)
+  (define string->keyword |##string->keyword|)
+  (define keyword->string |##keyword->string|)
+  (define (uninterned-keyword? x) #f)  ;; Chez doesn't have uninterned keywords
+  (define (string->uninterned-keyword s) (|##string->keyword| s))
+
+  ;;;; String constructors
+  (define (|##string| . chars) (apply string chars))
+
+  (define (|##substring-move!| src src-start src-end dst dst-start)
+    ;; Gambit: copy src[src-start..src-end) → dst[dst-start..]
+    (let ([len (- src-end src-start)])
+      (do ([i 0 (fx+ i 1)])
+          ((fx= i len))
+        (string-set! dst (+ dst-start i) (string-ref src (+ src-start i))))))
+
+  ;;;; Parameterize (single binding, Gambit fast path)
+  (define (|##parameterize1| param val thunk)
+    (parameterize ([param val]) (thunk)))
+
+  ;;;; Promises
+  (define (|##make-delay-promise| thunk)
+    (delay (thunk)))
+
+  (define (|##force-out-of-line| promise)
+    (force promise))
+
+  ;;;; Thread extras
+  (define (|##thread-yield!|) (thread-yield!))
+
+  (define (|##thread-end-with-uncaught-exception!| exn)
+    ;; In Chez, just raise the exception
+    (raise exn))
+
+  (define |##primordial-exception-handler|
+    (make-parameter
+      (lambda (exn)
+        (display "unhandled exception: " (current-error-port))
+        (write exn (current-error-port))
+        (newline (current-error-port)))))
+
+  (define |##primordial-thread| #f) ;; Chez doesn't have a primordial thread object
+
+  (define (|##primordial-exception-handler-hook-set!| proc)
+    ;; Install as base exception handler
+    (void))
+
+  (define |##repl-exception-handler-hook|
+    (make-parameter
+      (lambda (exn k)
+        (display "exception: " (current-error-port))
+        (write exn (current-error-port))
+        (newline (current-error-port)))))
+
+  (define (|##display-exception-hook-set!| proc) (void))
+
+  (define (|##default-display-exception| exn port)
+    (display "Exception: " port)
+    (write exn port)
+    (newline port))
+
+  (define (|##display-exception-in-context| exn cont port)
+    (|##default-display-exception| exn port))
+
+  ;;;; REPL
+  (define |##repl|
+    (case-lambda
+      [() (void)]
+      [(write-reason) (void)]))
+
+  (define (|##repl-within| cont write-reason)
+    (void))
+
+  ;;;; Continuation extras
+  (define (|##continuation-next| cont)
+    ;; No direct equivalent in Chez; return #f
+    #f)
+
+  (define (|##continuation-last| cont)
+    cont)
+
+  ;;;; I/O extras
+  (define (|##write-string| str port)
+    (display str port))
+
+  (define (|##read-subu8vector| bv start end port . need)
+    ;; Read bytes into bytevector; return count read
+    (let loop ([i start] [count 0])
+      (if (>= i end) count
+          (let ([b (get-u8 port)])
+            (if (eof-object? b) count
+                (begin
+                  (bytevector-u8-set! bv i b)
+                  (loop (+ i 1) (+ count 1))))))))
+
+  (define (|##write-subu8vector| bv start end port)
+    (do ([i start (fx+ i 1)])
+        ((fx= i end))
+      (put-u8 port (bytevector-u8-ref bv i))))
+
+  (define (|##u16vector-ref| bv i)
+    ;; Read as native-endian u16 from bytevector
+    (bytevector-u16-native-ref bv (* i 2)))
+
+  ;;;; Standard ports
+  (define (|##stderr-port|) (current-error-port))
+  (define (|##stdin-port|) (current-input-port))
+  (define (|##stdout-port|) (current-output-port))
+  (define (|##console-port|) (current-error-port))
+
+  ;;;; File operations
+  (define (|##file-exists?| path)
+    (file-exists? path))
+
+  ;;;; Time
+  (define (|##current-time-point|)
+    (let ([t (current-time 'time-monotonic)])
+      (+ (time-second t)
+         (/ (time-nanosecond t) 1000000000.0))))
+
+  ;;;; Values introspection
+  ;; Gambit can inspect multiple-values objects.
+  ;; Chez doesn't expose these directly. We approximate.
+  (define (|##values?| obj) #f)    ;; values objects don't exist as first-class in Chez
+  (define (|##values-length| obj) 1)
+  (define (|##values-ref| obj i) obj)
+
+  ;;;; Script marker
+  (define |##script-marker| (gensym "script-marker"))
+
+  ;;;; Source objects (Gambit source tracking)
+  ;; Gambit wraps datums with source info: (##make-source datum locat)
+  (define-record-type gambit-source
+    (fields code locat)
+    (sealed #t))
+
+  (define (|##source?| obj) (gambit-source? obj))
+  (define (|##source-code| src) (gambit-source-code src))
+  (define (|##source-locat| src) (gambit-source-locat src))
+  (define (|##sourcify| datum locat) (make-gambit-source datum locat))
+  (define (|##make-source| datum locat) (make-gambit-source datum locat))
+
+  ;;;; Location objects
+  (define-record-type gambit-locat
+    (fields container position)
+    (sealed #t))
+
+  (define (|##locat?| obj) (gambit-locat? obj))
+  (define (|##locat-container| loc) (gambit-locat-container loc))
+
+  ;;;; C code — no-op on Chez
+  (define-syntax |##c-code|
+    (syntax-rules ()
+      [(_ args ...) (void)]))
+
+  ;;;; Absent object
+  (define (|##absent-object|) absent)
+
+  ;;;; ==================================================================
+  ;;;; Gambit macro-* constants and accessors
+  ;;;; These are internal type tags and accessors. Many are used by the
+  ;;;; MOP and hash table code. We define them as constants/functions.
+  ;;;; ==================================================================
+
+  (define (macro-absent-obj) absent)
+  (define (macro-deleted-obj) deleted)
+  (define (macro-unused-obj) unused)
+  (define (macro-max-fixnum32) #x7fffffff)
+
+  ;; GC hash table flags — used by table.ss
+  ;; These are bitmask values from Gambit's internals
+  ;; Defined as thunks because Gambit uses them as macros: (macro-x) → value
+  (define (macro-gc-hash-table-flags ht) (vector-ref ht 3))
+  (define (macro-gc-hash-table-flag-need-rehash) 1)
+  (define (macro-gc-hash-table-flag-mem-alloc-keys) 2)
+  (define (macro-gc-hash-table-flag-weak-keys) 4)
+
+  ;; GC hash table layout accessors
+  ;; In Gambit, GC hash tables are special vectors with metadata at fixed indices
+  (define (macro-gc-hash-table-count ht) (vector-ref ht 1))
+  (define (macro-gc-hash-table-count-set! ht v) (vector-set! ht 1 v))
+  (define (macro-gc-hash-table-free ht) (vector-ref ht 2))
+  (define (macro-gc-hash-table-free-set! ht v) (vector-set! ht 2 v))
+  (define (macro-gc-hash-table-size) 5)  ;; metadata slots before key/val pairs
+  (define (macro-gc-hash-table-key0) 5)  ;; first key slot index
+
+  ;; Subtype tags — arbitrary unique integers
+  ;; Defined as thunks because Gambit uses them as macros: (macro-x) → value
+  (define (macro-subtype-structure) 1)
+  (define (macro-subtype-boxvalues) 2)
+  (define (macro-subtype-vector) 3)
+  (define (macro-subtype-pair) 4)
+  (define (macro-subtype-ratnum) 5)
+  (define (macro-subtype-cpxnum) 6)
+  (define (macro-subtype-symbol) 7)
+  (define (macro-subtype-keyword) 8)
+  (define (macro-subtype-frame) 9)
+  (define (macro-subtype-continuation) 10)
+  (define (macro-subtype-promise) 11)
+  (define (macro-subtype-weak) 12)
+  (define (macro-subtype-procedure) 13)
+  (define (macro-subtype-return) 14)
+  (define (macro-subtype-foreign) 15)
+  (define (macro-subtype-string) 16)
+  (define (macro-subtype-s8vector) 17)
+  (define (macro-subtype-u8vector) 18)
+  (define (macro-subtype-s16vector) 19)
+  (define (macro-subtype-u16vector) 20)
+  (define (macro-subtype-s32vector) 21)
+  (define (macro-subtype-u32vector) 22)
+  (define (macro-subtype-f32vector) 23)
+  (define (macro-subtype-s64vector) 24)
+  (define (macro-subtype-u64vector) 25)
+  (define (macro-subtype-f64vector) 26)
+  (define (macro-subtype-flonum) 27)
+  (define (macro-subtype-bignum) 28)
+
+  ;; Type tags
+  (define (macro-type-fixnum) 0)
+  (define (macro-type-mem1) 1)
+  (define (macro-type-mem2) 2)
+  (define (macro-type-subtyped) 3)
+  (define (macro-type-table) 30)
+  (define (macro-type-time) 31)
+  (define (macro-type-mutex) 32)
+  (define (macro-type-condvar) 33)
+  (define (macro-type-thread) 34)
+  (define (macro-type-tgroup) 35)
+  (define (macro-type-port) 36)
+  (define (macro-type-object-port) 37)
+  (define (macro-type-character-port) 38)
+  (define (macro-type-byte-port) 39)
+  (define (macro-type-device-port) 40)
+  (define (macro-type-vector-port) 41)
+  (define (macro-type-string-port) 42)
+  (define (macro-type-u8vector-port) 43)
+  (define (macro-type-raw-device-port) 44)
+  (define (macro-type-tcp-server-port) 45)
+  (define (macro-type-udp-port) 46)
+  (define (macro-type-directory-port) 47)
+  (define (macro-type-event-queue-port) 48)
+  (define (macro-type-readenv) 49)
+  (define (macro-type-writeenv) 50)
+  (define (macro-type-readtable) 51)
+  (define (macro-type-processor) 52)
+  (define (macro-type-vm) 53)
+  (define (macro-type-file-info) 54)
+  (define (macro-type-socket-info) 55)
+  (define (macro-type-address-info) 56)
+
+  ;; Number dispatch macro — Gambit uses this for optimized numeric dispatch
+  (define-syntax macro-number-dispatch
+    (syntax-rules ()
+      [(_ num err fixnum bignum ratnum flonum cpxnum)
+       (cond
+         [(fixnum? num) fixnum]
+         [(flonum? num) flonum]
+         [(bignum? num) bignum]
+         [(ratnum? num) ratnum]
+         [else cpxnum])]))
+
+  ;; Rational/complex accessors
+  (define (macro-ratnum-numerator x) (numerator x))
+  (define (macro-ratnum-denominator x) (denominator x))
+  (define (macro-cpxnum-real x) (real-part x))
+  (define (macro-cpxnum-imag x) (imag-part x))
+
+  ;; Write environment style
+  (define (macro-writeenv-style wenv) 'write)
+
+  ;; Read environment
+  (define (macro-readenv-port renv) (current-input-port))
+  (define (macro-readenv-filepos renv) 0)
+  (define (macro-readenv-script-line-set! renv val) (void))
+
+  ;; Readtable
+  (define (macro-readtable-write-extended-read-macros?-set! rt val) (void))
+  (define (macro-readtable-bracket-handler-set! rt handler) (void))
+  (define (macro-readtable-brace-handler-set! rt handler) (void))
+
+  ;; Exception
+  (define (macro-exception? obj)
+    (or (condition? obj) (error? obj)))
+
+  ;; Character port
+  (define (macro-character-port? p) (textual-port? p))
+  (define (macro-character-port-wchars p) 0)
+  (define (macro-character-port-output-width p) 80)
+  (define (macro-character-port-output-width-set! p w) (void))
+
+  ;; Mutex (Chez's mutex-acquire/mutex-release)
+  (define macro-mutex-lock! mutex-acquire)
+  (define macro-mutex-unlock! mutex-release)
+
+  ;; Current thread — Chez doesn't expose thread identity easily
+  (define (macro-current-thread) #f)
+
+  ;;;; ==================================================================
+  ;;;; GC hash table primitives
+  ;;;; Gambit has internal GC-aware hash tables. We implement them using
+  ;;;; Chez eq-hashtables wrapped in a vector for metadata compatibility.
+  ;;;; ==================================================================
+
+  ;; GC hash table = vector: [ht-ref, count, free, flags, ht-object]
+  (define (|##gc-hash-table-allocate| size flags loads)
+    (let ([v (make-vector (+ (macro-gc-hash-table-key0) (* size 2)) (void))])
+      (vector-set! v 0 'gc-hash-table)
+      (vector-set! v 1 0)    ;; count
+      (vector-set! v 2 size) ;; free
+      (vector-set! v 3 flags)
+      (vector-set! v 4 (make-eq-hashtable size)) ;; actual Chez hashtable
+      v))
+
+  (define (|##gc-hash-table-ref| ht key)
+    (let ([real-ht (vector-ref ht 4)])
+      (hashtable-ref real-ht key (void))))
+
+  (define (|##gc-hash-table-set!| ht key val)
+    (let ([real-ht (vector-ref ht 4)])
+      (hashtable-set! real-ht key val)
+      (vector-set! ht 1 (hashtable-size real-ht))))
+
+  (define (|##gc-hash-table-rehash!| ht) (void)) ;; Chez handles this internally
+
+  (define (|##gc-hash-table-resize!| ht new-size)
+    ;; Chez handles resizing internally, but we can recreate if needed
+    ht)
+
+  (define (|##gc-hash-table-for-each| ht proc)
+    (let ([real-ht (vector-ref ht 4)])
+      (let-values ([(keys vals) (hashtable-entries real-ht)])
+        (do ([i 0 (fx+ i 1)])
+            ((fx= i (vector-length keys)))
+          (proc (vector-ref keys i) (vector-ref vals i))))))
+
+  ;;;; ==================================================================
+  ;;;; Readtable / reader internals — stubs
+  ;;;; The Gerbil reader has its own implementation; these are stubs
+  ;;;; for code that references Gambit's reader internals.
+  ;;;; ==================================================================
+
+  (define (|##main-readtable-set!| rt) (void))
+  (define (|##make-standard-readtable|) (void))
+  (define (|##readtable-char-sharp-handler-set!| rt ch handler) (void))
+  (define (|##readtable-setup-for-language!| rt . args) (void))
+  (define (|##make-readenv| port readtable wrapper closer) (void))
+  (define (|##read-datum-or-eof| renv) (read))
+  (define (|##read-all-as-a-begin-expr-from-path| path readtable wrapper closer)
+    (call-with-input-file path
+      (lambda (port)
+        (let loop ([forms '()])
+          (let ([datum (read port)])
+            (if (eof-object? datum)
+                (cons 'begin (reverse forms))
+                (loop (cons datum forms))))))))
+  (define (|##read-sharp-bang| renv next start-pos) (void))
+  ;; ##read-line already covered by |##read-line| above
+
+  ;;;; ==================================================================
+  ;;;; Eval/compile internals — stubs
+  ;;;; ==================================================================
+
+  (define (|##eval-top| source cte) (eval source))
+  (define (|##load| path) (load path))
+  (define |##interaction-cte| (make-parameter #f))
+  (define (|##expand-source-set!| proc) (void))
+  (define (|##form-size| form) 1)
+  (define (|##make-macro-descr| def-syntax? expander) (cons def-syntax? expander))
+  (define (|##macro-descr| m) m)
+  (define (|##macro-descr-set!| m d) (void))
+  (define (|##default-user-interrupt-handler|) (void))
+  (define (|##wr-set!| handler) (void))
+  (define-syntax |##lambda|
+    (syntax-rules ()
+      [(_ args body ...) (lambda args body ...)]))
+
+  ;;;; File/path operations (Gambit compatibility)
+
+  ;; rename-file: Gambit takes optional replace? arg, Chez takes 2
+  (define gambit-rename-file
+    (case-lambda
+      [(old new) (rename-file old new)]
+      [(old new replace?)
+       (when (and replace? (file-exists? new))
+         (delete-file new))
+       (rename-file old new)]))
+
+  ;; Path operations
+  (define (gambit-path-expand path . rest)
+    (if (null? rest)
+      (if (and (> (string-length path) 0)
+               (char=? (string-ref path 0) #\~))
+        (string-append (getenv "HOME") (substring path 1 (string-length path)))
+        path)
+      ;; (path-expand path base)
+      (let ([base (car rest)])
+        (if (and (> (string-length path) 0)
+                 (char=? (string-ref path 0) #\/))
+          path
+          (string-append base "/" path)))))
+
+  (define (gambit-path-normalize path)
+    path) ;; stub
+
+  (define (path-strip-trailing-directory-separator path)
+    (let ([len (string-length path)])
+      (if (and (> len 1) (char=? (string-ref path (- len 1)) #\/))
+        (substring path 0 (- len 1))
+        path)))
+
+  ;; Directory and symlink operations
+  (define (create-directory path)
+    (mkdir path))
+
+  (define (gambit-create-symbolic-link target link-name)
+    (void)) ;; stub - would need FFI
+
+  ;; File info
+  (define-record-type gambit-file-info-record
+    (fields type))
+
+  (define (gambit-file-info path . rest)
+    ;; Return a simple record with file type
+    (cond
+      [(file-directory? path)
+       (make-gambit-file-info-record 'directory)]
+      [(file-exists? path)
+       (make-gambit-file-info-record 'regular)]
+      [else
+       (make-gambit-file-info-record #f)]))
+
+  (define gambit-file-info? gambit-file-info-record?)
+
+  (define (gambit-file-info-type fi)
+    (if (gambit-file-info-record? fi)
+      (gambit-file-info-record-type fi)
+      #f))
+
+  ;; Condition variables
+  (define make-condition-variable
+    (case-lambda
+      [() (chez:make-condition)]
+      [(name) (chez:make-condition)]))
+
+  (define (condition-variable-signal! cv)
+    (condition-signal cv))
+
+  (define (condition-variable-broadcast! cv)
+    (condition-broadcast cv))
+
+  ;; Wills (weak reference finalizers) — stubs
+  (define (make-will obj action) (cons obj action))
+  (define (will-testator w) (car w))
+  (define (will? w) (and (pair? w) #t))
+
+  ;; System info
+  (define (configure-command-string) "")
+  (define (system-version-string) "Chez Scheme")
+
+  ;; Object serial numbers
+  (define __serial-number-table (make-eq-hashtable))
+  (define __serial-counter 0)
+  (define (object->serial-number obj)
+    (or (eq-hashtable-ref __serial-number-table obj #f)
+        (let ([n (begin (set! __serial-counter (+ __serial-counter 1))
+                        __serial-counter)])
+          (eq-hashtable-set! __serial-number-table obj n)
+          n)))
 
   ) ;; end library

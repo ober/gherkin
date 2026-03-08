@@ -35,7 +35,7 @@
     ;; precedence
     substruct? base-struct compute-class-slots
     ;; method table
-    method-ref method-set! call-method
+    method-ref method-set! bind-method! call-method
     ;; sealing
     class-type-seal!
     ;; structure operations (re-exports from types.sls for convenience)
@@ -381,6 +381,9 @@
           (|##structure-set!| klass 11 new-methods)
           (set! methods new-methods)))
       (symbolic-table-set! methods name proc)))
+
+  ;; bind-method! is the name used in the self-hosted Gerbil runtime
+  (define bind-method! method-set!)
 
   ;; --- Call a method on an object ---
   (define (call-method obj name . args)

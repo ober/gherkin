@@ -46,7 +46,7 @@
     make-spinlock spinlock-acquire! spinlock-release!
     ;; misc
     iota last-pair last append-reverse
-    identity
+    identity drop take
     )
 
   (import
@@ -326,6 +326,10 @@
       tail))
 
   (define (identity x) x)
+  (define (drop lst n) (list-tail lst n))
+  (define (take lst n)
+    (if (zero? n) '()
+      (cons (car lst) (take (cdr lst) (- n 1)))))
 
   ;; --- arithmetic ---
   (define (1+ x) (+ x 1))
