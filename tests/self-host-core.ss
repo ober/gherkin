@@ -913,6 +913,90 @@
 (printf "  Dependency-ordered loading works~n")
 
 ;;; ============================================================
+;;; Standard Library (Phase 6)
+;;; ============================================================
+
+(printf "~n=== Standard Library (Phase 6) ===~n")
+
+;; Tier 1: No dependencies
+(define tier1-modules
+  '(:std/deprecation :std/contract :std/misc/list-builder :std/misc/symbol))
+
+(printf "~n--- Tier 1: Zero-dependency modules ---~n")
+(for-each
+  (lambda (mod)
+    (guard (exn [#t
+      (printf "  ~a load error: ~a~n" mod
+        (if (message-condition? exn) (condition-message exn) exn))
+      (check (format "~a loads" mod) #f)])
+      (eval `(gerbil-load-module ',mod))
+      (check (format "~a loads" mod) (eval `(gerbil-module-loaded? ,(substring (symbol->string mod) 1 (string-length (symbol->string mod))))))))
+  tier1-modules)
+
+;; Tier 2: Depends on error/sugar (already loaded from Phase 4)
+(define tier2-modules
+  '(:std/misc/func :std/misc/alist :std/misc/plist))
+
+(printf "~n--- Tier 2: Error/sugar-dependent modules ---~n")
+(for-each
+  (lambda (mod)
+    (guard (exn [#t
+      (printf "  ~a load error: ~a~n" mod
+        (if (message-condition? exn) (condition-message exn) exn))
+      (check (format "~a loads" mod) #f)])
+      (eval `(gerbil-load-module ',mod))
+      (check (format "~a loads" mod) (eval `(gerbil-module-loaded? ,(substring (symbol->string mod) 1 (string-length (symbol->string mod))))))))
+  tier2-modules)
+
+;; Tier 3: Deeper dependencies
+(define tier3-modules
+  '(:std/misc/completion :std/text/hex))
+
+(printf "~n--- Tier 3: Deeper dependency modules ---~n")
+(for-each
+  (lambda (mod)
+    (guard (exn [#t
+      (printf "  ~a load error: ~a~n" mod
+        (if (message-condition? exn) (condition-message exn) exn))
+      (check (format "~a loads" mod) #f)])
+      (eval `(gerbil-load-module ',mod))
+      (check (format "~a loads" mod) (eval `(gerbil-module-loaded? ,(substring (symbol->string mod) 1 (string-length (symbol->string mod))))))))
+  tier3-modules)
+
+;; Functional verification for loaded modules
+(printf "~n--- Functional Verification ---~n")
+
+;; Test alist operations (from :std/misc/alist)
+(guard (exn [#t
+  (printf "  alist error: ~a~n" (if (message-condition? exn) (condition-message exn) exn))
+  (check "alist operations work" #f)])
+  (let ([result (eval '(agetq 'b '((a . 1) (b . 2) (c . 3))))])
+    (check "alist operations work" (eqv? result 2))))
+
+;; Test plist operations (from :std/misc/plist)
+(guard (exn [#t
+  (printf "  plist error: ~a~n" (if (message-condition? exn) (condition-message exn) exn))
+  (check "plist operations work" #f)])
+  (let ([result (eval '(pgetq 'b '(a 1 b 2 c 3)))])
+    (check "plist operations work" (eqv? result 2))))
+
+;; Test hex encoding (from :std/text/hex)
+(guard (exn [#t
+  (printf "  hex error: ~a~n" (if (message-condition? exn) (condition-message exn) exn))
+  (check "hex encoding works" #f)])
+  (let ([result (eval '(hex-encode (string->utf8 "Hi")))])
+    (check "hex encoding works" (string? result))))
+
+;; Count total loaded std modules
+(guard (exn [#t (check "std module count" #f)])
+  (let* ([all-mods (eval '(gerbil-loaded-modules))]
+         [std-mods (filter (lambda (m) (and (> (string-length m) 3)
+                                              (string=? (substring m 0 4) "std/")))
+                           all-mods)])
+    (printf "  Loaded ~a std library modules~n" (length std-mods))
+    (check "std module count" (>= (length std-mods) 8))))
+
+;;; ============================================================
 ;;; Summary
 ;;; ============================================================
 
