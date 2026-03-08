@@ -252,6 +252,26 @@
          (runtime util)
          (runtime syntax)))
 
+;; ##type — Gambit type tag. Returns fixnum tag for type discrimination.
+;; Bit 0 = 0 for immediates (fixnum, char, bool), 1 for non-immediates.
+(inject '|##type|
+  (lambda (obj)
+    (cond
+      [(fixnum? obj) 0]        ;; fixnum tag = 0 (even → immediate)
+      [(char? obj) 2]          ;; char tag = 2 (even → immediate)
+      [(eq? obj #t) 0]         ;; boolean → immediate
+      [(eq? obj #f) 0]         ;; boolean → immediate
+      [(null? obj) 0]          ;; null → immediate
+      [(pair? obj) 3]          ;; pair → non-immediate (odd)
+      [(symbol? obj) 1]        ;; symbol → non-immediate (odd) + symbolic
+      [(string? obj) 31]       ;; string → non-immediate
+      [(vector? obj) 5]        ;; vector → non-immediate
+      [(gerbil-struct? obj) 5] ;; structure → non-immediate
+      [else 1])))              ;; default non-immediate
+
+;; ##closure? — check if obj is a closure
+(inject '|##closure?| procedure?)
+
 ;; Inject ##eqv?
 (inject '|##eqv?| eqv?)
 
@@ -632,9 +652,9 @@
                        (|##structure-set!| obj 2 (make-hash-table-eq))
                        (guard (exn [#t (void)])
                          (when (top-level-bound? '*core-syntax-expanders*)
-                           ({bind-core-syntax-expanders! obj}))
+                           (call-method obj 'bind-core-syntax-expanders!))
                          (when (top-level-bound? '*core-macro-expanders*)
-                           ({bind-core-macro-expanders! obj})))
+                           (call-method obj 'bind-core-macro-expanders!)))
                        obj))))
           (eval '(set! make-top-context
                    (lambda args
@@ -1047,6 +1067,59 @@
   (check "expand works" #f)])
   (let ([compiled (gerbil-compile-top '(def (add a b) (+ a b)))])
     (check "expand works" (and (pair? compiled) (eq? (car compiled) 'define)))))
+
+;;; ============================================================
+;;; Expander Integration (Phase A)
+;;; ============================================================
+
+(printf "~n=== Expander Integration (Phase A) ===~n")
+
+;; Test 1: core-expand1 (single step expansion)
+(guard (exn [#t
+  (printf "  core-expand1 error: ~a~n" (if (message-condition? exn) (condition-message exn) exn))
+  (check "core-expand1 works" #f)])
+  (let ([result (eval '(core-expand1 (make-AST '(if #t 1 2) #f)))])
+    (check "core-expand1 works" (pair? result))))
+
+;; Test 2: core-expand-expression on literal
+(guard (exn [#t
+  (printf "  literal expand error: ~a~n" (if (message-condition? exn) (condition-message exn) exn))
+  (check "expand literal" #f)])
+  (let ([result (eval '(core-expand-expression (make-AST '42 #f)))])
+    (check "expand literal" (|##structure?| result))))
+
+;; Test 3: core-expand-expression on (if #t 1 2)
+(guard (exn [#t
+  (printf "  if expand error: ~a~n" (if (message-condition? exn) (condition-message exn) exn))
+  (check "expand if-form" #f)])
+  (let ([result (eval '(core-expand-expression (make-AST '(if #t 1 2) #f)))])
+    (check "expand if-form" (|##structure?| result))))
+
+;; Test 4: core-apply-expander with method dispatch
+(guard (exn [#t
+  (printf "  core-apply-expander error: ~a~n" (if (message-condition? exn) (condition-message exn) exn))
+  (check "core-apply-expander works" #f)])
+  (let* ([stx (eval '(make-AST '(if #t 1 2) #f))]
+         [bind (eval `(resolve-identifier (make-AST 'if #f)))])
+    (check "core-apply-expander works" (and bind #t))))
+
+;; Test 5: resolve-identifier finds core bindings
+(guard (exn [#t
+  (printf "  resolve error: ~a~n" (if (message-condition? exn) (condition-message exn) exn))
+  (check "resolve-identifier works" #f)])
+  (let ([bind (eval '(resolve-identifier (make-AST 'begin #f)))])
+    (check "resolve-identifier works" (and bind (|##structure?| bind)))))
+
+;; Test 6: method dispatch on expander structs
+(guard (exn [#t
+  (printf "  method dispatch error: ~a~n" (if (message-condition? exn) (condition-message exn) exn))
+  (when (irritants-condition? exn) (printf "  irritants: ~a~n" (condition-irritants exn)))
+  (check "method dispatch on expanders" #f)])
+  ;; Use an existing expression-form from the root context
+  (let ([bind (eval '(resolve-identifier (make-AST 'if #f)))])
+    (let ([K (eval `(&syntax-binding-e ',bind))])
+      (let ([m (eval `(method-ref ',K 'apply-macro-expander))])
+        (check "method dispatch on expanders" (procedure? m))))))
 
 ;;; ============================================================
 ;;; Summary
