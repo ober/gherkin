@@ -2764,7 +2764,25 @@
     ":std/hash-table" ":std/stxutil"
     ":std/source" ":std/generic" ":std/amb" ":std/assert"
     ":std/cli/getopt" ":std/instance" ":std/config"
-    ":std/iter" ":std/coroutine"))
+    ":std/iter" ":std/coroutine"
+    ;; text
+    ":std/text/utf16"
+    ;; misc (threading/concurrency)
+    ":std/misc/barrier" ":std/misc/concurrent-plan"
+    ":std/misc/process" ":std/misc/shared" ":std/misc/sync"
+    ":std/misc/threads" ":std/misc/timeout" ":std/misc/wg"
+    ":std/misc/channel" ":std/misc/template" ":std/misc/text"
+    ;; more top-level std
+    ":std/xml" ":std/foreign" ":std/metaclass"
+    ":std/interactive" ":std/logger" ":std/parser"
+    ":std/make" ":std/ref" ":std/stxparam" ":std/test"
+    ;; build system
+    ":std/build-config" ":std/build-features" ":std/build-script"
+    ":std/build-spec" ":std/build" ":std/build-std" ":std/ssi"
+    ;; cli
+    ":std/cli/multicall"
+    ;; more misc
+    ":std/misc/rwlock"))
 
 (for-each (lambda (mod)
   (check (string-append "load " mod)
