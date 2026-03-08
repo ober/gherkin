@@ -2721,6 +2721,47 @@
       (equal? (eval `(pqueue-pop! ',pq)) '(1 . a)))))
 
 ;;; ============================================================
+;;; Phase I.3: Module Loader — load modules through gherkin module loader
+;;; ============================================================
+
+(printf "~n--- I.3: Module loader integration ---~n")
+
+(import (module loader))
+(define gerbil-dir-i3 (string-append (getenv "HOME") "/mine/gerbil"))
+(gerbil-module-init! gerbil-dir-i3)
+
+(define loader-test-modules
+  '(;; misc modules
+    ":std/misc/queue" ":std/misc/deque" ":std/misc/pqueue"
+    ":std/misc/shuffle" ":std/misc/atom" ":std/misc/walist"
+    ":std/misc/lru" ":std/misc/repr" ":std/misc/path"
+    ":std/misc/list" ":std/misc/hash" ":std/misc/string"
+    ":std/misc/ports" ":std/misc/number" ":std/misc/channel"
+    ":std/misc/timeout" ":std/misc/rbtree" ":std/misc/bytes"
+    ":std/misc/func" ":std/misc/uuid" ":std/misc/process"
+    ":std/misc/symbol" ":std/misc/alist" ":std/misc/plist"
+    ":std/misc/list-builder" ":std/misc/completion"
+    ;; srfi
+    ":std/srfi/1" ":std/srfi/8" ":std/srfi/9" ":std/srfi/13"
+    ":std/srfi/14" ":std/srfi/19" ":std/srfi/41" ":std/srfi/43"
+    ":std/srfi/125"
+    ;; text
+    ":std/text/hex" ":std/text/utf8" ":std/text/csv"
+    ":std/text/base64"
+    ;; core
+    ":std/error" ":std/sort" ":std/sugar" ":std/hash-table"
+    ":std/values" ":std/contract" ":std/format" ":std/pregexp"
+    ":std/getopt" ":std/cli/getopt" ":std/logger"
+    ":std/deprecation"))
+
+(for-each (lambda (mod)
+  (check (string-append "load " mod)
+    (guard (exn [#t #f])
+      (gerbil-load-module mod)
+      #t)))
+  loader-test-modules)
+
+;;; ============================================================
 ;;; Summary
 ;;; ============================================================
 
