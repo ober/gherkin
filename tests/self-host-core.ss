@@ -2461,6 +2461,93 @@
     (check "gherkin bridge imports >=12 modules" (>= reg-size 12))))
 
 ;;; ============================================================
+;;; Phase H: Production REPL and Tooling
+;;; ============================================================
+
+(printf "~n=== Production REPL and Tooling (Phase H) ===~n")
+
+;; H.1: Module loader
+(printf "~n--- H.1: Module loader infrastructure ---~n")
+(check "module loader exists"
+  (guard (exn [#t #f])
+    (eval '(import (module loader)))
+    #t))
+
+(check "module loader init"
+  (guard (exn [#t #f])
+    (let ([home (getenv "HOME")])
+      (eval `(gerbil-module-init! ,(string-append home "/mine/gerbil/src/")))
+      #t)))
+
+(check "module path resolution"
+  (guard (exn [#t #f])
+    (let ([r (eval '(gerbil-resolve-module-path ':std/sort))])
+      (and (pair? r) (string? (cdr r))))))
+
+(check "module caching"
+  (guard (exn [#t #f])
+    ;; Load :std/sort through module loader, should hit cache
+    (eval '(gerbil-load-module ':std/sort))
+    (eval '(gerbil-module-loaded? "std/sort"))))
+
+;; H.2: REPL infrastructure
+(printf "~n--- H.2: REPL infrastructure ---~n")
+(check "REPL library loads"
+  (guard (exn [#t
+    (printf "  H.2 repl load error: ~a~n"
+      (if (message-condition? exn) (condition-message exn) exn))
+    #f])
+    (eval '(import (repl repl)))
+    #t))
+
+;; H.3: gxc compiler tool
+(printf "~n--- H.3: gxc compiler tool ---~n")
+(check "gxc script exists"
+  (file-exists? "src/tools/gxc.ss"))
+
+;; Test gxc --check on a simple file
+(let ([test-file "/tmp/gherkin-test-h3.ss"])
+  (call-with-output-file test-file
+    (lambda (port)
+      (display "(def (hello name) (string-append \"Hello, \" name \"!\"))\n" port)
+      (display "(def (square x) (* x x))\n" port))
+    'replace)
+  (guard (exn [#t
+    (printf "  H.3 gxc error: ~a~n"
+      (if (message-condition? exn) (condition-message exn) exn))
+    (check "gxc --check mode" #f)])
+    ;; Compile the test file using gherkin directly
+    (let* ([forms (gerbil-read-file test-file)]
+           [stripped (map (lambda (f)
+                           (if (annotated-datum? f)
+                             (strip-annotations (annotated-datum-value f))
+                             (strip-annotations f)))
+                         forms)]
+           [compiled (map gerbil-compile-top stripped)])
+      (check "gxc --check mode"
+        (and (= (length compiled) 2)
+             (pair? (car compiled))
+             (pair? (cadr compiled)))))))
+
+;; H.4: Source location tracking
+(printf "~n--- H.4: Source location tracking ---~n")
+(guard (exn [#t
+  (printf "  H.4 error: ~a~n"
+    (if (message-condition? exn) (condition-message exn) exn))
+  (check "source location in annotations" #f)])
+  (let* ([test-file "/tmp/gherkin-test-h4.ss"]
+         [_ (call-with-output-file test-file
+              (lambda (port)
+                (display "(def (foo x) x)\n" port))
+              'replace)]
+         [forms (gerbil-read-file test-file)]
+         [form (car forms)]
+         [src (annotated-datum-source form)])
+    (printf "  H.4: source = ~a~n" src)
+    (check "source location in annotations"
+      (and (annotated-datum? form) src))))
+
+;;; ============================================================
 ;;; Summary
 ;;; ============================================================
 

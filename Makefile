@@ -13,7 +13,7 @@ TEST_FILES = tests/test-compat.ss \
              tests/test-threading.ss \
              tests/test-reader.ss
 
-.PHONY: all test clean compile self-host-test bootstrap regenerate
+.PHONY: all test clean compile self-host-test bootstrap regenerate gxc repl
 
 all: compile
 
@@ -65,6 +65,12 @@ bootstrap:
 
 regenerate: bootstrap
 	@echo "Bootstrap regeneration complete."
+
+repl: compile
+	@$(SCHEME) -q --libdirs .:src --program src/repl/gxi.ss
+
+gxc: compile
+	@$(SCHEME) -q --libdirs .:src --program src/tools/gxc.ss -- $(GXCARGS)
 
 loc:
 	@wc -l $(SLS_FILES) $(TEST_FILES) 2>/dev/null || true
