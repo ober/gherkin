@@ -33,11 +33,12 @@ We have a working cross-compiler (gherkin) and bootstrap environment:
 | Component | Compilation | Evaluation | Gap to Self-Hosting |
 |-----------|-------------|------------|---------------------|
 | Runtime (14 files) | 100% | ✅ Works | None — fully operational |
-| Expander (9 files) | 100% | ✅ Works | `core-expand-expression` works, method dispatch fixed via injected `method-ref` |
+| Expander (9 files) | 100% | ✅ Works | `core-expand-expression` works, method dispatch fixed |
 | Core macros (10 files) | 100% | ⚠️ Partial | `define-syntax` forms skip (need expander) |
 | Compiler (12 files) | 100% | ⚠️ Partial | `define-syntax` forms skip |
-| Module system | ✅ Loader works | ✅ 14 std modules | Uses gherkin, not Gerbil's expander |
+| Module system | ✅ Loader works | ✅ **376 std modules** | All non-test .ss files compile and load |
 | REPL | ✅ Works | ✅ Gerbil syntax | Uses gherkin for compilation |
+| Test suite | **563 checks** | ✅ All pass | Compilation + loader + functionality |
 
 **Phase A complete**: `core-expand-expression` works — method dispatch on expander structs is fully operational. The fix required (1) injecting `##type` and `##closure?` Gambit primitives for hash table operations at eval time, and (2) replacing `{method obj}` syntax with `(call-method obj 'method)` in eval'd context constructors since `{}` isn't a Chez reader feature.
 
