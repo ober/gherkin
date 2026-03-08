@@ -2596,6 +2596,131 @@
     #t))
 
 ;;; ============================================================
+;;; Phase I: Module Loading — compile Gerbil std modules via gherkin
+;;; ============================================================
+
+(printf "~n--- I.1: Standard library module compilation ---~n")
+
+;; Helper: compile a Gerbil source file and count errors
+(define (try-compile-module mod-path)
+  (let ([gerbil-dir (string-append (getenv "HOME") "/mine/gerbil")])
+    (guard (exn [#t
+      (printf "  ~a: FILE-ERR ~a~n" mod-path
+        (if (message-condition? exn) (condition-message exn) exn))
+      (values -1 -1 0)])
+      (let* ([path (string-append gerbil-dir "/src/"
+                     (substring mod-path 1 (string-length mod-path)) ".ss")]
+             [forms (map strip-annotations (gerbil-read-file path))]
+             [compile-errors 0]
+             [eval-errors 0]
+             [real-eval-errors 0])
+        (for-each (lambda (f)
+          (guard (exn [#t (set! compile-errors (+ compile-errors 1))])
+            (let ([compiled (gerbil-compile-top f)])
+              (when compiled
+                (guard (exn [#t
+                  (set! eval-errors (+ eval-errors 1))
+                  (let ([msg (if (message-condition? exn) (condition-message exn) "?")])
+                    (when (not (or (string=? msg "unknown module")
+                                   (string=? msg "export form outside of a module or library")))
+                      (set! real-eval-errors (+ real-eval-errors 1))))])
+                  (eval compiled))))))
+          forms)
+        (values compile-errors real-eval-errors (length forms))))))
+
+;; Test each module compiles with zero compiler errors
+(define test-modules
+  '(":std/misc/queue"
+    ":std/misc/deque"
+    ":std/misc/pqueue"
+    ":std/misc/shuffle"
+    ":std/misc/atom"
+    ":std/misc/walist"
+    ":std/misc/channel"
+    ":std/misc/timeout"
+    ":std/misc/lru"
+    ":std/misc/rbtree"
+    ":std/misc/repr"
+    ":std/misc/number"
+    ":std/misc/ports"
+    ":std/misc/string"
+    ":std/misc/list"
+    ":std/misc/hash"
+    ":std/misc/path"
+    ":std/sort"
+    ":std/srfi/1"
+    ":std/srfi/8"
+    ":std/srfi/13"
+    ":std/srfi/14"
+    ":std/srfi/41"
+    ":std/srfi/43"
+    ":std/error"
+    ":std/text/hex"
+    ":std/text/utf8"
+    ":std/text/csv"
+    ":std/hash-table"
+    ":std/cli/getopt"
+    ":std/sugar"))
+
+(for-each (lambda (mod)
+  (let-values ([(ce ee forms) (try-compile-module mod)])
+    (check (string-append "compile " mod)
+      (= ce 0))))
+  test-modules)
+
+;; I.2: Verify key module functionality after compilation
+(printf "~n--- I.2: Module functionality verification ---~n")
+
+;; Queue operations
+(guard (exn [#t
+  (printf "  queue test error: ~a~n" (if (message-condition? exn) (condition-message exn) exn))
+  (check "queue operations" #f)])
+  (try-compile-module ":std/misc/queue")
+  (let ([q (eval '(make-queue))])
+    (eval `(enqueue! ',q 1))
+    (eval `(enqueue! ',q 2))
+    (eval `(enqueue! ',q 3))
+    (check "queue operations"
+      (and (eqv? (eval `(queue-length ',q)) 3)
+           (eqv? (eval `(dequeue! ',q)) 1)
+           (equal? (eval `(queue->list ',q)) '(2 3))))))
+
+;; Deque operations
+(guard (exn [#t
+  (printf "  deque test error: ~a~n" (if (message-condition? exn) (condition-message exn) exn))
+  (check "deque operations" #f)])
+  (try-compile-module ":std/misc/deque")
+  (let ([d (eval '(make-deque))])
+    (eval `(push-back! ',d 10))
+    (eval `(push-back! ',d 20))
+    (eval `(push-back! ',d 30))
+    (check "deque operations"
+      (and (eqv? (eval `(deque-length ',d)) 3)
+           (eqv? (eval `(pop-front! ',d)) 10)))))
+
+;; Sort module
+(guard (exn [#t
+  (printf "  sort test error: ~a~n" (if (message-condition? exn) (condition-message exn) exn))
+  (check "sort operations" #f)])
+  (try-compile-module ":std/sort")
+  (check "sort operations"
+    (equal? (eval '(sort '(3 1 4 1 5 9) <)) '(1 1 3 4 5 9))))
+
+;; Priority queue
+(guard (exn [#t
+  (printf "  pqueue test error: ~a~n" (if (message-condition? exn) (condition-message exn) exn))
+  (check "pqueue operations" #f)])
+  (try-compile-module ":std/misc/pqueue")
+  ;; pqueue constructor: (make-pqueue prio-fn [cmp] [initial-size])
+  ;; prio extracts a numeric priority, cmp defaults to < (min-heap)
+  (let ([pq (eval '(make-pqueue car))])
+    (eval `(pqueue-push! ',pq '(1 . a)))
+    (eval `(pqueue-push! ',pq '(3 . c)))
+    (eval `(pqueue-push! ',pq '(2 . b)))
+    (check "pqueue operations"
+      (equal? (eval `(pqueue-pop! ',pq)) '(1 . a)))))
+
+;;; ============================================================
 ;;; Summary
 ;;; ============================================================
 

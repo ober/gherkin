@@ -2883,13 +2883,20 @@
   ;; Map ##-prefixed Gambit primitives to Chez equivalents
   ;; Gambit → Chez function rename table
   ;; Maps Gambit/Gerbil function names to their Chez Scheme equivalents
+  ;; Gambit → Chez function rename map
+  ;; IMPORTANT: Only include names that are genuinely different between Gambit and Chez.
+  ;; Do NOT include hash-*, fx*, fl* — these are provided by gambit-compat.sls
+  ;; and renaming them would break the expander which uses Gerbil naming internally.
   (define *gambit-rename-map*
-    '((cdr-set!        . set-cdr!)
-      (car-set!        . set-car!)
-      (list-copy       . list-copy)          ;; same in Chez, but ensure it's available
-      (nonnegative-fixnum? . fxnonnegative?)
-      (random-integer  . random)
-      (default-random-source . #f)           ;; not a function; handled below
+    '((cdr-set!              . set-cdr!)
+      (car-set!              . set-car!)
+      (nonnegative-fixnum?   . fxnonnegative?)
+      (random-integer        . random)
+      (default-random-source . #f)
+      (fxquotient            . fxdiv)
+      (fxremainder           . fxmod)
+      (fxarithmetic-shift-left  . fxsll)
+      (fxarithmetic-shift-right . fxsra)
       ))
 
   (define (gambit-rename sym)
@@ -4426,6 +4433,38 @@
       (:std/generic     . #f)  ;; stripped
       (:std/foreign     . #f)  ;; stripped
       (:gerbil/runtime  . #f)  ;; stripped
+      (:gerbil/gambit   . #f)  ;; stripped — Gambit primitives handled by compiler
+      (:gerbil/gambit/ports . #f)
+      (:gerbil/gambit/bits . #f)
+      (:gerbil/gambit/threads . #f)
+      (:gerbil/gambit/continuations . #f)
+      (:gerbil/gambit/os . #f)
+      (:gerbil/gambit/misc . #f)
+      (:gerbil/gambit/exceptions . #f)
+      (:gerbil/gambit/readtables . #f)
+      (:gerbil/gambit/fixnum . #f)
+      (:gerbil/gambit/flonum . #f)
+      (:gerbil/gambit/hash . #f)
+      (:gerbil/gambit/exact . #f)
+      (:gerbil/core     . #f)  ;; stripped — core forms handled by compiler
+      (:gerbil/expander  . #f)
+      (:std/values       . (compat std-values))
+      (:std/misc/func   . #f)  ;; stripped — identity, compose, etc. handled inline
+      (:std/misc/deque   . #f)  ;; will be self-hosted
+      (:std/misc/pqueue  . #f)  ;; will be self-hosted
+      (:std/misc/shuffle . #f)  ;; will be self-hosted
+      (:std/misc/walist  . #f)  ;; will be self-hosted
+      (:std/misc/atom    . #f)  ;; will be self-hosted
+      (:std/misc/timeout . #f)  ;; will be self-hosted
+      (:std/misc/lru     . #f)  ;; will be self-hosted
+      (:std/misc/rbtree  . #f)  ;; will be self-hosted
+      (:std/srfi/8      . #f)  ;; receive — handled by compiler
+      (:std/srfi/9      . #f)  ;; define-record-type — use Chez native
+      (:std/srfi/14     . #f)  ;; char-sets
+      (:std/srfi/41     . #f)  ;; streams
+      (:std/srfi/43     . #f)  ;; vector-lib
+      (:std/srfi/srfi-support . #f)  ;; stripped
+      (:std/hash-table   . #f)  ;; stripped — use Chez native hashtables
       ))
 
   ;; Extract the bare library name from an import spec, stripping
