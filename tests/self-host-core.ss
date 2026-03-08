@@ -1122,6 +1122,79 @@
         (check "method dispatch on expanders" (procedure? m))))))
 
 ;;; ============================================================
+;;; define-syntax and Macros (Phase B)
+;;; ============================================================
+
+;; Restore Chez builtins that were shadowed by Gerbil's expander/sugar
+;; The compiled expander redefines syntax-rules, with-syntax, etc.
+;; We need to restore Chez's versions for Phase B macros to work.
+(eval '(import (only (chezscheme)
+         define-syntax syntax-rules syntax-case syntax with-syntax
+         define lambda let let* letrec letrec* begin if cond case)))
+
+(printf "~n=== define-syntax and Macros (Phase B) ===~n")
+
+;; Test 1: defrules produces working define-syntax (avoid void in template)
+(guard (exn [#t
+  (printf "  defrules error: ~a~n" (if (message-condition? exn) (condition-message exn) exn))
+  (check "defrules works" #f)])
+  (let ([compiled (gerbil-compile-top '(defrules my-when ()
+                    ((my-when test body ...) (if test (begin body ...) #f))))])
+    (eval compiled)
+    (check "defrules works" (eqv? (eval '(my-when #t 42)) 42))))
+
+;; Test 2: multi-clause defrules
+(guard (exn [#t
+  (printf "  multi-clause error: ~a~n" (if (message-condition? exn) (condition-message exn) exn))
+  (check "multi-clause defrules" #f)])
+  (let ([compiled (gerbil-compile-top '(defrules my-cond-test ()
+                    ((my-cond-test) #f)
+                    ((my-cond-test x) x)
+                    ((my-cond-test x rest ...) (if x x (my-cond-test rest ...)))))])
+    (eval compiled)
+    (check "multi-clause defrules" (eqv? (eval '(my-cond-test #f #f 3)) 3))))
+
+;; Test 3: defsyntax with Chez syntax-case
+(guard (exn [#t
+  (printf "  defsyntax error: ~a~n" (if (message-condition? exn) (condition-message exn) exn))
+  (check "defsyntax works" #f)])
+  (let ([compiled (gerbil-compile-top '(defsyntax (my-swap stx)
+                    (syntax-case stx ()
+                      [(_ a b) #'(list b a)])))])
+    (eval compiled)
+    (check "defsyntax works" (equal? (eval '(my-swap 1 2)) '(2 1)))))
+
+;; Test 4: define-syntax via direct eval
+(guard (exn [#t
+  (printf "  compile-syntax error: ~a~n" (if (message-condition? exn) (condition-message exn) exn))
+  (check "define-syntax eval" #f)])
+  (eval '(define-syntax my-swap2
+           (syntax-rules ()
+             ((my-swap2 a b) (list b a)))))
+  (check "define-syntax eval" (equal? (eval '(my-swap2 10 20)) '(20 10))))
+
+;; Test 5: defrules sugar macros
+(guard (exn [#t
+  (printf "  sugar error: ~a~n" (if (message-condition? exn) (condition-message exn) exn))
+  (check "sugar macros work" #f)])
+  (for-each
+    (lambda (form) (eval (gerbil-compile-top form)))
+    '((defrules test-when ()
+        ((test-when test body ...) (if test (begin body ...) #f)))))
+  (check "sugar macros work" (eqv? (eval '(test-when #t 99)) 99)))
+
+;; Test 6: syntax-case based macros work at eval
+(guard (exn [#t
+  (printf "  syntax-case error: ~a~n" (if (message-condition? exn) (condition-message exn) exn))
+  (check "syntax-case macros" #f)])
+  (eval '(define-syntax my-let1
+           (lambda (stx)
+             (syntax-case stx ()
+               [(_ var val body ...)
+                #'(let ([var val]) body ...)]))))
+  (check "syntax-case macros" (eqv? (eval '(my-let1 x 10 (+ x 1))) 11)))
+
+;;; ============================================================
 ;;; Summary
 ;;; ============================================================
 

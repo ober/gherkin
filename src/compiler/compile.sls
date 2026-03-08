@@ -2520,7 +2520,9 @@
                                 (template (clean-defrule-template
                                             ;; Use last element as template
                                             (list-ref clause (- (length clause) 1)))))
-                            `((,name ,@(if (pair? pattern) pattern (list pattern)))
+                            ;; Pattern already includes the macro name as head
+                            ;; e.g. (my-when test body ...) — don't add name again
+                            `(,(if (pair? pattern) pattern (list name pattern))
                               ,template)))
                         ;; Prefer fender clauses (more specific), then non-fender
                         ;; But since syntax-rules matches first matching pattern,
