@@ -515,27 +515,44 @@ Gerbil's `match` is a complex macro. Gherkin handles common cases (literal patte
 | `:std/text/hex` | ✅ Working | |
 | `:std/format` | ⬜ Not started | Uses `include` for format.scm |
 | `:std/pregexp` | ⚠️ Partial | Include'd pregexp.scm has Gerbil error class deps |
-| `:std/hash-table` | ⬜ Not started | |
-| `:std/misc/string` | ⬜ Not started | Some functions in compat/misc.sls |
-| `:std/misc/list` | ⬜ Not started | Some functions in compat/misc.sls |
-| `:std/misc/path` | ⬜ Not started | Some functions in compat/misc.sls |
-| `:std/misc/hash` | ⬜ Not started | |
-| `:std/misc/bytes` | ⬜ Not started | |
-| `:std/misc/number` | ⬜ Not started | |
-| `:std/misc/ports` | ⬜ Not started | |
-| `:std/misc/queue` | ⬜ Not started | |
-| `:std/srfi/1` | ⬜ Not started | Partial in compat/misc.sls |
+| `:std/hash-table` | ✅ Compiles | 0 compile errors |
+| `:std/misc/string` | ✅ Compiles | 0 compile errors, needs :gerbil/gambit imports |
+| `:std/misc/list` | ✅ Compiles | 0 compile errors |
+| `:std/misc/path` | ✅ Compiles | 0 compile errors |
+| `:std/misc/hash` | ✅ Compiles | 0 compile errors |
+| `:std/misc/bytes` | ⚠️ Partial | Compiles, but heavy u8vector/Gambit deps |
+| `:std/misc/number` | ✅ Compiles | 0 compile errors |
+| `:std/misc/ports` | ✅ Compiles | 0 compile errors |
+| `:std/misc/queue` | ✅ Working | Compile + eval verified |
+| `:std/misc/deque` | ✅ Working | Compile + eval verified |
+| `:std/misc/pqueue` | ✅ Working | Compile + eval verified |
+| `:std/misc/shuffle` | ✅ Compiles | 0 compile errors |
+| `:std/misc/atom` | ✅ Compiles | 0 compile errors |
+| `:std/misc/walist` | ✅ Compiles | 0 compile errors |
+| `:std/misc/channel` | ✅ Compiles | 0 compile errors |
+| `:std/misc/timeout` | ✅ Compiles | 0 compile errors |
+| `:std/misc/lru` | ✅ Compiles | 0 compile errors |
+| `:std/misc/rbtree` | ✅ Compiles | 0 compile errors |
+| `:std/misc/repr` | ✅ Compiles | 0 compile errors |
+| `:std/srfi/1` | ✅ Compiles | 0 compile errors |
+| `:std/srfi/8` | ✅ Compiles | receive macro |
 | `:std/srfi/9` | ⬜ Not started | define-record-type |
-| `:std/srfi/13` | ⬜ Not started | String library |
+| `:std/srfi/13` | ✅ Compiles | 0 compile errors |
+| `:std/srfi/14` | ✅ Compiles | char-sets |
+| `:std/srfi/41` | ✅ Compiles | streams |
+| `:std/srfi/43` | ✅ Compiles | vector-lib |
+| `:std/sugar` | ✅ Compiles | 0 compile errors |
+| `:std/cli/getopt` | ✅ Compiles | 0 compile errors |
 
 #### III.2 Text processing (moderate — mostly pure Scheme)
 
 | Module | Status | Notes |
 |--------|--------|-------|
 | `:std/text/json` | ⬜ Not started | 6 sub-modules, pure Scheme parser/writer |
-| `:std/text/csv` | ⬜ Not started | Compat shim exists |
-| `:std/text/base64` | ⬜ Not started | Compat shim exists |
-| `:std/text/utf8` | ⬜ Not started | Compat shim exists |
+| `:std/text/csv` | ✅ Compiles | 0 compile errors |
+| `:std/text/base64` | ⬜ Not started | Reader error |
+| `:std/text/utf8` | ✅ Compiles | 0 compile errors |
+| `:std/text/hex` | ✅ Compiles | 0 compile errors |
 | `:std/text/utf16` | ⬜ Not started | |
 | `:std/text/zlib` | ⬜ Not started | Needs FFI (libz) |
 | `:std/xml` | ⬜ Not started | SSAX parser, mostly Scheme |

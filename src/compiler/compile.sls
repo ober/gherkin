@@ -3798,22 +3798,52 @@
          (unless ,test ,@body (,loop)))))
 
   ;; --- using compilation ---
+  ;; Gerbil's `using` has several forms:
+  ;; 1. (using (var :- Type) body...) — single binding, var refers to itself
+  ;; 2. (using (var expr :- Type) body...) — single binding with init expr
+  ;; 3. (using ((var1 expr1 :- T1) (var2 expr2 :- T2) ...) body...) — multiple bindings
+  ;; 4. (using (n :- Type) body...) — just type assertion, var = var
+  ;; All type annotations are stripped; compiled as let bindings.
   (define (compile-using form)
-    ;; (using (var :- Type) body...) → (let ((var var)) body...)
-    ;; (using (var :- Type expr) body...) → (let ((var expr)) body...)
-    ;; For now, strip the type annotation and compile as let binding
-    (let ((binding (cadr form))
+    (let ((spec (cadr form))
           (body (cddr form)))
-      (if (and (pair? binding) (>= (length binding) 3))
-        (let* ((var (car binding))
-               ;; Skip :- and Type, get optional expr
-               (expr (if (>= (length binding) 4)
-                       (gerbil-compile-expression (cadddr binding))
-                       var)))
-          `(let ((,var ,expr))
-             ,@(map gerbil-compile-expression body)))
-        ;; Fallback: just compile body
-        `(begin ,@(map gerbil-compile-expression body)))))
+      ;; Determine if it's a single binding or multiple bindings
+      ;; Multiple: ((var1 ...) (var2 ...)) — first element is a list
+      ;; Single: (var :- Type ...) — first element is a symbol
+      (if (and (pair? spec) (pair? (car spec)) (not (symbol? (car spec))))
+        ;; Multiple bindings
+        (let ((bindings (map compile-using-binding spec)))
+          `(let ,bindings
+             ,@(compile-body body)))
+        ;; Single binding
+        (let ((binding (compile-using-binding spec)))
+          `(let (,binding)
+             ,@(compile-body body))))))
+
+  ;; Parse a single using binding spec into (var expr)
+  ;; Formats: (var :- Type), (var expr :- Type), (var expr), (var)
+  (define (compile-using-binding spec)
+    (cond
+      ;; (var) — identity
+      ((and (pair? spec) (null? (cdr spec)))
+       (list (car spec) (gerbil-compile-expression (car spec))))
+      ;; (var :- Type) — var binds to itself
+      ((and (pair? spec) (symbol? (car spec))
+            (pair? (cdr spec)) (memq (cadr spec) '(:- : :?)))
+       (list (car spec) (gerbil-compile-expression (car spec))))
+      ;; (var expr :- Type) — var binds to expr, type stripped
+      ((and (pair? spec) (symbol? (car spec))
+            (pair? (cdr spec)) (pair? (cddr spec))
+            (memq (caddr spec) '(:- : :?)))
+       (list (car spec) (gerbil-compile-expression (cadr spec))))
+      ;; (var expr) — plain binding
+      ((and (pair? spec) (symbol? (car spec)) (pair? (cdr spec)))
+       (list (car spec) (gerbil-compile-expression (cadr spec))))
+      ;; Fallback — identity
+      ((symbol? spec)
+       (list spec spec))
+      (else
+       (list (car spec) (gerbil-compile-expression (car spec))))))
 
   ;; --- @method compilation ---
   (define (compile-at-method form)
