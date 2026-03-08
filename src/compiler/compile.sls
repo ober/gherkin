@@ -353,6 +353,18 @@
                          (char=? (string-ref alias-str 0) #\@))
                   '(begin)  ;; no-op
                   `(define ,alias ,type-expr)))))
+           ;; defraise/context — Gerbil error raise macro
+           ;; (defraise/context (rule where args ...) (Klass msg irritants: irr))
+           ;; → (defrules rule () ((_ where args ...) (raise (Klass msg ...))))
+           ((eq? head 'defraise/context)
+            (compile-defraise/context form))
+           ;; deferror-class — Gerbil error class definition
+           ;; (deferror-class Name () predicate?) →
+           ;;   (defclass (Name Error) () transparent: #t)
+           ;;   (defmethod {:init! Name} Error:::init!)
+           ;;   (def predicate? Name?)
+           ((eq? head 'deferror-class)
+            (compile-deferror-class form))
            ;; defstruct-type — Gerbil runtime struct type declaration
            ;; (defstruct-type type::t (super::t) make-fn pred?
            ;;   id: type-id name: display-name)
@@ -701,6 +713,9 @@
           '(|%%unbound|))
          ;; ## Gambit primitives → FFI replacements
          ((and (symbol? expr) (gambit-primitive-replacement expr))
+          => (lambda (x) x))
+         ;; Gambit → Chez function renames (cdr-set! → set-cdr!, etc.)
+         ((and (symbol? expr) (gambit-rename expr))
           => (lambda (x) x))
          (else expr)))
       ;; Handle dotted pairs (alist entries like [key: . val]) as cons expressions
@@ -1133,6 +1148,13 @@
            ;; delay / force / lazy — pass through to Chez
            ((memq head '(delay force lazy))
             `(,head ,@(map gerbil-compile-expression (cdr expr))))
+           ;; abort! — Gerbil's abort: just evaluate the expression (typically a raise)
+           ((eq? head 'abort!)
+            (gerbil-compile-expression (cadr expr)))
+           ;; exception-context — returns the enclosing function name
+           ;; (exception-context name) → 'name
+           ((eq? head 'exception-context)
+            `(quote ,(cadr expr)))
            ;; cond-expand
            ((eq? head 'cond-expand)
             (compile-cond-expand expr))
@@ -1582,6 +1604,18 @@
              (loop (cdr forms) bindings (cons form exprs))])))))
 
   ;; --- let compilation ---
+  ;; Extract variable name from a possibly-typed binding
+  ;; (n :- node) → n, (n : :fixnum) → n, n → n
+  (define (binding-var b)
+    (cond
+      ((symbol? b) b)
+      ((and (pair? b) (symbol? (car b))
+            (pair? (cdr b))
+            (memq (cadr b) '(:- : :?)))
+       (car b))
+      ((pair? b) (car b))  ;; fallback
+      (else b)))
+
   (define (compile-let head expr)
     (let ((bindings-or-name (cadr expr)))
       (cond
@@ -1589,7 +1623,7 @@
         ((symbol? bindings-or-name)
          `(let ,bindings-or-name
             ,(map (lambda (b)
-                    `(,(car b) ,(gerbil-compile-expression (cadr b))))
+                    `(,(binding-var (car b)) ,(gerbil-compile-expression (cadr b))))
                   (caddr expr))
             ,@(compile-body (cdddr expr))))
         ;; Gerbil-style single binding: (let (name init) body...)
@@ -1633,17 +1667,17 @@
               `(let ([,tmp ,init])
                  (let (,@(map (lambda (p) (list (car p) (cdr p))) pat-binds))
                    ,(compile-let-bindings head rest body))))
-          ;; normal binding
+          ;; normal binding — strip type annotations from var name
           (if (null? rest)
-            `(,head ((,(car b) ,(gerbil-compile-expression (cadr b))))
+            `(,head ((,(binding-var (car b)) ,(gerbil-compile-expression (cadr b))))
                     ,@(compile-body body))
             ;; For let*, chain one binding at a time
             (if (eq? head 'let*)
-              `(let* ((,(car b) ,(gerbil-compile-expression (cadr b))))
+              `(let* ((,(binding-var (car b)) ,(gerbil-compile-expression (cadr b))))
                  ,(compile-let-bindings head rest body))
               ;; For let, collect all normal bindings
               `(,head ,(map (lambda (b)
-                              `(,(car b) ,(gerbil-compile-expression (cadr b))))
+                              `(,(binding-var (car b)) ,(gerbil-compile-expression (cadr b))))
                             bindings)
                       ,@(compile-body body)))))))))
 
@@ -2278,17 +2312,20 @@
                ',(if (list? fields) fields (list fields))
                ',struct-props
                ',constructor))
-           ;; Constructor: takes all fields (inherited + own) positionally
-           ;; Allocates directly with ##structure to avoid arg-count checks
-           (define (,(string->symbol (string-append "make-" (symbol->string name))) . args)
-             (let* ((type ,(string->symbol (string-append (symbol->string name) "::t")))
-                    (n (class-type-field-count type))
-                    (obj (apply |##structure| type (make-list n #f))))
-               (let lp ((rest args) (i 1))
-                 (when (and (pair? rest) (<= i n))
-                   (|##structure-set!| obj i (car rest))
-                   (lp (cdr rest) (+ i 1))))
-               obj))
+           ;; Constructor: use make-instance when constructor: is specified
+           ;; (handles :init! method lookup), otherwise direct allocation
+           ,(if constructor
+              `(define (,(string->symbol (string-append "make-" (symbol->string name))) . args)
+                 (apply make-instance ,(string->symbol (string-append (symbol->string name) "::t")) args))
+              `(define (,(string->symbol (string-append "make-" (symbol->string name))) . args)
+                 (let* ((type ,(string->symbol (string-append (symbol->string name) "::t")))
+                        (n (class-type-field-count type))
+                        (obj (apply |##structure| type (make-list n #f))))
+                   (let lp ((rest args) (i 1))
+                     (when (and (pair? rest) (<= i n))
+                       (|##structure-set!| obj i (car rest))
+                       (lp (cdr rest) (+ i 1))))
+                   obj)))
            ;; Predicate
            (define (,(string->symbol (string-append (symbol->string name) "?")) obj)
              (|##structure-instance-of?| obj ',type-id))
@@ -2338,6 +2375,52 @@
                                     obj val)
                               (unchecked-slot-set! obj ',(car fs) val))
                            mut)))))))))
+
+  ;; --- defraise/context compilation ---
+  ;; (defraise/context (rule where args ...) (Klass message irritants: irritants))
+  ;; → (defrules rule () ((_ where args ...) (raise (Klass message where: 'where irritants: (cons 'where irritants)))))
+  (define (compile-defraise/context form)
+    (let* ((sig (cadr form))       ;; (rule where args ...)
+           (body (caddr form))     ;; (Klass message irritants: irritants)
+           (rule-name (car sig))   ;; rule
+           (where (cadr sig))      ;; where
+           (args (cddr sig))       ;; (args ...)
+           (klass (car body))      ;; Klass
+           (message (cadr body)))  ;; message
+      ;; Generate: (defrules rule () ((_ where args ...) (raise (klass message where: 'where irritants: [args ...]))))
+      ;; Simplified: just define a function that raises
+      (gerbil-compile-top
+        `(def (,rule-name ,where ,@args)
+           (raise (,klass ,message where: (quote ,where) irritants: (list (quote ,where) ,@args)))))))
+
+  ;; --- deferror-class compilation ---
+  ;; (deferror-class Name () pred?) → (defclass (Name Error) () transparent: #t) + init + pred
+  ;; (deferror-class (Name Parent ...) () pred?) → (defclass (Name Parent ...) ...) + init + pred
+  ;; (deferror-class Name () pred? kons) → ... with custom constructor
+  (define (compile-deferror-class form)
+    (let* ((args (cdr form))
+           (name-spec (car args))
+           ;; Parse: name-spec is either Name or (Name Parent ...)
+           (name (if (pair? name-spec) (car name-spec) name-spec))
+           (parents (if (pair? name-spec)
+                      (cdr name-spec)
+                      '(Error)))
+           (slots (if (pair? (cdr args)) (cadr args) '()))
+           (pred-alias (if (and (pair? (cdr args)) (pair? (cddr args)))
+                         (caddr args) #f))
+           (kons (if (and (pair? (cdr args)) (pair? (cddr args)) (pair? (cdddr args)))
+                   (cadddr args) 'Error:::init!)))
+      ;; Compile as defclass + defmethod + optional predicate alias
+      (let ((class-form `(defclass (,name ,@parents) ,slots transparent: #t))
+            (method-form `(defmethod (:init! ,name) ,kons)))
+        `(begin
+           ,(gerbil-compile-top class-form)
+           ,(gerbil-compile-top method-form)
+           ,@(if (and pred-alias (not (eq? pred-alias #f)))
+               (let ((pred-name (string->symbol
+                                  (string-append (symbol->string name) "?"))))
+                 `((define ,pred-alias ,pred-name)))
+               '())))))
 
   ;; --- defclass compilation ---
   (define (compile-defclass form)
@@ -2779,11 +2862,13 @@
           (val (caddr expr)))
       (cond
         ;; (set! (accessor obj) val) → (accessor-set! obj val)
+        ;; With Gambit→Chez rename: cdr-set! → set-cdr!, car-set! → set-car!
         ((pair? target)
          (let* ((accessor (car target))
                 (obj (cadr target))
-                (setter (string->symbol
-                          (string-append (symbol->string accessor) "-set!"))))
+                (raw-setter (string->symbol
+                              (string-append (symbol->string accessor) "-set!")))
+                (setter (or (gambit-rename raw-setter) raw-setter)))
            `(,setter ,(gerbil-compile-expression obj)
                      ,(gerbil-compile-expression val))))
         ;; (set! self.field val) → (slot-set! self 'field val)
@@ -2796,6 +2881,21 @@
 
   ;; --- Gambit primitive replacements ---
   ;; Map ##-prefixed Gambit primitives to Chez equivalents
+  ;; Gambit → Chez function rename table
+  ;; Maps Gambit/Gerbil function names to their Chez Scheme equivalents
+  (define *gambit-rename-map*
+    '((cdr-set!        . set-cdr!)
+      (car-set!        . set-car!)
+      (list-copy       . list-copy)          ;; same in Chez, but ensure it's available
+      (nonnegative-fixnum? . fxnonnegative?)
+      (random-integer  . random)
+      (default-random-source . #f)           ;; not a function; handled below
+      ))
+
+  (define (gambit-rename sym)
+    (let ((entry (assq sym *gambit-rename-map*)))
+      (and entry (cdr entry))))
+
   (define *gambit-primitive-map*
     '((|##os-getpid|  . ffi-getpid)
       (|##os-getppid| . ffi-getppid)))
@@ -3909,12 +4009,25 @@
          (fasl-read port))))
 
   ;; --- Helper: extract property from property list ---
+  ;; Match a property key against a keyword symbol like constructor:
+  ;; Handles both keyword symbols and Gerbil keyword objects
+  (define (prop-key-match? key candidate)
+    (or (eq? candidate key)
+        ;; Match keyword object against keyword symbol:
+        ;; key = constructor: (symbol), candidate = #[keyword-object "constructor"]
+        (and (|##keyword?| candidate) (symbol? key)
+             (let ((ks (symbol->string key)))
+               (and (fx> (string-length ks) 1)
+                    (char=? (string-ref ks (fx- (string-length ks) 1)) #\:)
+                    (string=? (|##keyword->string| candidate)
+                              (substring ks 0 (fx- (string-length ks) 1))))))))
+
   (define (extract-prop key props default)
     (cond
       ((null? props) default)
-      ((and (pair? (car props)) (eq? (caar props) key))
+      ((and (pair? (car props)) (prop-key-match? key (caar props)))
        (cdar props))
-      ((and (pair? props) (eq? (car props) key) (pair? (cdr props)))
+      ((and (pair? props) (prop-key-match? key (car props)) (pair? (cdr props)))
        (cadr props))
       ((pair? props) (extract-prop key (cdr props) default))
       (else default)))

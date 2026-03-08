@@ -398,6 +398,300 @@ Tested via gherkin bridge — modules are compiled from source through gherkin a
 
 ---
 
+## Remaining Gaps to Full Self-Hosting
+
+### Current Architecture
+
+Gherkin is a **cross-compiler**: it pattern-matches Gerbil syntax and emits Chez Scheme. This is distinct from true self-hosting, where Gerbil's own expander and compiler run natively on Chez. The cross-compiler has proven capable — gerbil-shell (27 modules, 30k+ lines) compiles and runs — but several categories of gaps remain.
+
+### I. Native Expander Bootstrap (the fundamental gap)
+
+**Goal:** Gerbil's own expander performs all macro expansion, replacing gherkin's pattern-based translation.
+
+This is the Racket CS "linklet problem" — the expander must be able to expand itself.
+
+#### I.1 Gerbil syntax-case on Gerbil syntax objects
+
+Gerbil's `syntax-case` operates on wrapped syntax objects (`AST`, `stx-datum`, `stx-e`) with its own mark/rename hygiene system. Currently, user macros fall through to Chez's native `syntax-case`, which works on Chez syntax objects. For the expander to run natively, Gerbil's `syntax-case` must operate on Gerbil syntax objects at eval time.
+
+- [ ] Gerbil's `core-syntax-case` dispatches correctly at eval time
+- [ ] Pattern variables bind to Gerbil syntax objects, not Chez datums
+- [ ] `syntax` template reconstructs Gerbil syntax objects with correct marks
+
+#### I.2 Phase separation (for-syntax)
+
+Gerbil has multi-phase compilation where `(import (for-syntax ...))` makes bindings available at macro expansion time. Gherkin currently strips `for-syntax` wrappers. Chez has its own R6RS phase system which doesn't align with Gerbil's.
+
+- [ ] `for-syntax` imports evaluated at correct phase
+- [ ] Phase-separated environments for compile-time vs runtime
+- [ ] `begin-syntax` blocks evaluate at phase 1
+
+#### I.3 Module expansion without gherkin bridge
+
+`core-import-module` currently falls back to gherkin for unknown modules. True self-hosting means the expander's own `core-expand-module-begin` → `core-expand-block` pipeline handles all module forms, including `def`, `defrules`, `defsyntax`, `defstruct`, `defclass`, etc.
+
+- [ ] `core-expand-module` processes a module end-to-end (no gherkin fallback)
+- [ ] Core macro bindings (`def`, `defstruct`, `defrules`, etc.) available in expander context
+- [ ] Module exports resolved through expander's binding tables
+- [ ] Recursive module imports through expander (not gherkin bridge)
+
+#### I.4 Bootstrap cycle
+
+Once the expander can expand itself, the bootstrap is complete: generate pre-expanded `.scm` files for the runtime, expander, core macros, and compiler. Building Gerbil-on-Chez then requires only Chez Scheme.
+
+- [ ] Expander expands its own source files
+- [ ] Pre-expanded bootstrap files regenerated from Gerbil source
+- [ ] Build from bootstrap requires only Chez (no Gerbil or gherkin)
+
+---
+
+### II. Language Features
+
+Features that gherkin handles partially or not at all.
+
+#### II.1 Method dispatch syntax
+
+`{method obj}` is a Gerbil reader feature that compiles to `(@method ...)`. Chez's reader doesn't know `{}` as method dispatch. Currently worked around with `call-method` injection, but real Gerbil code uses `{}` pervasively.
+
+- [ ] Reader emits method dispatch forms for `{}`
+- [ ] `@method` compiles to `call-method` at read time (not eval time)
+
+#### II.2 Full pattern matching
+
+Gerbil's `match` is a complex macro. Gherkin handles common cases (literal patterns, variable binding, cons/list, `else`) but not the full language.
+
+- [ ] Record/struct patterns (`(point x y)`)
+- [ ] Guard patterns (`(? predicate)`, `(? predicate pattern)`)
+- [ ] `and`/`or` pattern combinators
+- [ ] Quasiquote patterns
+- [ ] `match*` (multiple value match)
+
+#### II.3 Iterators and for loops
+
+`:std/iter` defines `for`, `for/collect`, `for/fold`, `for/hash`, `in-range`, `in-list`, `in-hash-keys`, etc. These are heavy macros that expand to iterator protocol calls.
+
+- [ ] Iterator protocol (`iter-start!`, `iter-next!`, `iter-end?`)
+- [ ] `for` / `for/collect` / `for/fold` macro expansion
+- [ ] Standard iterators (`in-range`, `in-list`, `in-vector`, `in-hash-keys`, `in-hash-values`)
+
+#### II.4 Interfaces
+
+`:std/interface` provides `definterface` with structural typing and method dispatch tables. Used in modern Gerbil code (especially `:std/io`).
+
+- [ ] `definterface` macro expansion
+- [ ] Interface method tables
+- [ ] `satisfies?` type checking
+
+#### II.5 Other macros
+
+- [ ] Full `:std/sugar` (`try`/`catch`/`finally`, `defvalues`, `with-destroy`, `hash`, `hash-eq`, etc.)
+- [ ] `parameterize` with Gerbil parameters (currently uses Chez `parameterize`)
+- [ ] `defsyntax` with `syntax-case` at full generality (currently limited)
+- [ ] `with` (struct accessor binding)
+- [ ] `using` (method dispatch binding)
+- [ ] Keyword argument dispatch in user-defined functions
+
+---
+
+### III. Standard Library Coverage
+
+~339 non-test modules in `:std/`, ~12 currently working through gherkin bridge + 43 compat shims.
+
+#### III.1 Pure Scheme (easiest — no FFI, no heavy macros)
+
+| Module | Status | Notes |
+|--------|--------|-------|
+| `:std/error` | ✅ Working | |
+| `:std/sort` | ✅ Working | Via `include` of 5 `.scm` files |
+| `:std/values` | ✅ Working | |
+| `:std/deprecation` | ✅ Working | |
+| `:std/contract` | ✅ Working | |
+| `:std/misc/list-builder` | ✅ Working | |
+| `:std/misc/alist` | ✅ Working | |
+| `:std/misc/plist` | ✅ Working | |
+| `:std/misc/symbol` | ✅ Working | |
+| `:std/misc/func` | ✅ Working | |
+| `:std/misc/completion` | ✅ Working | |
+| `:std/text/hex` | ✅ Working | |
+| `:std/format` | ⬜ Not started | Uses `include` for format.scm |
+| `:std/pregexp` | ⚠️ Partial | Include'd pregexp.scm has Gerbil error class deps |
+| `:std/hash-table` | ⬜ Not started | |
+| `:std/misc/string` | ⬜ Not started | Some functions in compat/misc.sls |
+| `:std/misc/list` | ⬜ Not started | Some functions in compat/misc.sls |
+| `:std/misc/path` | ⬜ Not started | Some functions in compat/misc.sls |
+| `:std/misc/hash` | ⬜ Not started | |
+| `:std/misc/bytes` | ⬜ Not started | |
+| `:std/misc/number` | ⬜ Not started | |
+| `:std/misc/ports` | ⬜ Not started | |
+| `:std/misc/queue` | ⬜ Not started | |
+| `:std/srfi/1` | ⬜ Not started | Partial in compat/misc.sls |
+| `:std/srfi/9` | ⬜ Not started | define-record-type |
+| `:std/srfi/13` | ⬜ Not started | String library |
+
+#### III.2 Text processing (moderate — mostly pure Scheme)
+
+| Module | Status | Notes |
+|--------|--------|-------|
+| `:std/text/json` | ⬜ Not started | 6 sub-modules, pure Scheme parser/writer |
+| `:std/text/csv` | ⬜ Not started | Compat shim exists |
+| `:std/text/base64` | ⬜ Not started | Compat shim exists |
+| `:std/text/utf8` | ⬜ Not started | Compat shim exists |
+| `:std/text/utf16` | ⬜ Not started | |
+| `:std/text/zlib` | ⬜ Not started | Needs FFI (libz) |
+| `:std/xml` | ⬜ Not started | SSAX parser, mostly Scheme |
+
+#### III.3 I/O system (hard — interfaces + actors)
+
+`:std/io` is ~30 modules built on `:std/interface`. This is the modern I/O layer replacing Gambit ports.
+
+- [ ] Bio (buffered I/O): input, output, chunked, delimited
+- [ ] Socket I/O: stream, datagram, server
+- [ ] String I/O: reader, writer, packed
+- [ ] File I/O
+
+Blocked by: `definterface` (Phase II.4)
+
+#### III.4 Networking (hard — FFI + I/O + TLS)
+
+| Module | Status | Blockers |
+|--------|--------|----------|
+| `:std/net/httpd` | ⬜ | I/O system, sockets |
+| `:std/net/request` | ⬜ | HTTP client, TLS |
+| `:std/net/websocket` | ⬜ | I/O system |
+| `:std/net/ssl` | ⬜ | FFI to OpenSSL |
+| `:std/net/bio` | ⬜ | I/O system |
+
+#### III.5 Crypto & database (hard — FFI)
+
+| Module | Status | Blockers |
+|--------|--------|----------|
+| `:std/crypto` | ⬜ | FFI to libcrypto (OpenSSL) |
+| `:std/db/sqlite` | ⬜ | FFI to libsqlite3 |
+| `:std/db/postgresql` | ⬜ | FFI to libpq |
+| `:std/db/conpool` | ⬜ | Threading + db driver |
+
+#### III.6 Concurrency (hard — Gambit threading model)
+
+| Module | Status | Blockers |
+|--------|--------|----------|
+| `:std/event` | ⬜ | Gambit thread scheduling |
+| `:std/coroutine` | ⬜ | Continuations |
+| `:std/actor-v18/*` | ⬜ | Threading + I/O + crypto |
+| `:std/misc/channel` | ⬜ | Threading primitives |
+
+#### III.7 Build system
+
+| Module | Status | Notes |
+|--------|--------|-------|
+| `:std/build-script` | ⬜ | `defbuild-script` |
+| `:std/build-spec` | ⬜ | Build specification parsing |
+| `:std/build` | ⬜ | `gerbil build` driver |
+| `:std/cli/getopt` | ⬜ | Command-line parsing |
+| `:std/cli/multicall` | ⬜ | Multi-command CLI |
+
+---
+
+### IV. Gambit Primitives Gap
+
+`gambit-compat.sls` maps 90+ `##` primitives. Remaining gaps by category:
+
+#### IV.1 Threading and concurrency
+
+Gambit uses green threads with `##thread-start!`, `##mutex-lock!`, `##condition-variable-signal!`. Chez has native OS threads via `fork-thread`. The threading models are fundamentally different:
+
+- Gambit: cooperative green threads, single OS thread (default), `thread-yield!`
+- Chez: preemptive OS threads, `fork-thread`, `make-mutex`, `mutex-acquire`
+
+- [ ] Thread creation/join mapping
+- [ ] Mutex/condition-variable mapping
+- [ ] Mailbox/thread-specific mapping
+- [ ] `dynamic-wind` vs `thread-terminate!` semantics
+
+#### IV.2 I/O port internals
+
+Gambit exposes port internals (`##port-device`, `##read-u8`, `##write-u8`, `##port-mutex`). Chez ports are opaque. The `fdio.sls` compat shim handles basic fd operations but not the full Gambit port API.
+
+- [ ] Port-to-fd extraction
+- [ ] Custom port types (device ports)
+- [ ] Port buffering control
+- [ ] Binary/textual port distinction alignment
+
+#### IV.3 Continuations
+
+Gambit has `##continuation?`, `##continuation-creator`, `##continuation-next`. Chez has `call/cc` and `call/1cc` but different continuation inspection APIs.
+
+- [ ] Continuation capture alignment
+- [ ] Continuation inspection (if needed)
+
+#### IV.4 Weak references and finalization
+
+Gambit uses `##make-will`, `##will-testator`, `##will-execute!`. Chez uses `make-guardian` / `guardian` protocol.
+
+- [ ] Will → guardian mapping
+- [ ] Weak pair / weak hashtable
+
+#### IV.5 Memory and GC
+
+- [ ] `##gc` → `(collect)`
+- [ ] `##process-statistics` → Chez equivalents
+- [ ] Memory allocation tracking
+
+---
+
+### V. Toolchain and Ecosystem
+
+#### V.1 Standalone executables
+
+Gherkin-shell demonstrates the pattern: `compile-whole-program` + custom boot file. But there's no general `gxc -exe` equivalent.
+
+- [ ] General-purpose `gxc -exe` for any Gerbil program
+- [ ] Automatic dependency bundling
+- [ ] Shared library linking (`-l` flags from build.ss)
+
+#### V.2 Standard build system
+
+`pkg.sls` parses `build.ss` and `gerbil.pkg` but compilation goes through gherkin, not `gxc`.
+
+- [ ] `gerbil build` equivalent using gherkin compilation
+- [ ] `build.ss` `lib:` / `exe:` target types
+- [ ] `gerbil.pkg` `depend:` automatic LOADPATH
+
+#### V.3 Package ecosystem
+
+Most Gerbil packages assume the Gambit backend. Third-party packages would need:
+
+- [ ] `gxpkg install` that compiles with gherkin instead of gxc
+- [ ] Compatibility testing for popular packages
+- [ ] Package-level compat shims where needed
+
+---
+
+### Strategic Options
+
+**Option A: Extend the cross-compiler (pragmatic)**
+
+Keep gherkin as the primary compiler. Add more pattern handlers, compat shims, and compiler transforms. This is what built gerbil-shell — proven to work for real code. Covers 80%+ of Gerbil usage without solving the expander bootstrap.
+
+Pros: Incremental, each step produces working code, proven approach
+Cons: Each new macro/feature needs manual compiler support, can't handle arbitrary user macros
+
+**Option B: Native expander bootstrap (pure)**
+
+Get Gerbil's own expander running on Chez. This is the Racket CS approach — hard upfront, but once done, all Gerbil macros and syntax work automatically.
+
+Pros: Complete compatibility, handles arbitrary user macros, true self-hosting
+Cons: Large upfront investment, chicken-and-egg bootstrap problem
+
+**Option C: Hybrid (recommended)**
+
+Use gherkin for the bootstrap (compile runtime + expander + core to Chez), then switch to Gerbil's expander for user code. This is essentially what Phases A-H achieved partially — the expander runs but falls back to gherkin. The gap is closing the fallback path.
+
+1. Extend gherkin to handle remaining core macro patterns (match, for, interface)
+2. Progressively wire more of the expander's pipeline to run natively
+3. Eventually eliminate the gherkin fallback entirely
+
+---
+
 ## Milestone Summary
 
 | # | Milestone | Dependencies | Difficulty | Status |
@@ -410,10 +704,32 @@ Tested via gherkin bridge — modules are compiled from source through gherkin a
 | F | Bootstrap artifacts | Phase A-E | Easy | ✅ Done |
 | G | Full std library | Phase C+D | Medium | ✅ Done |
 | H | Production REPL/tooling | Phase D+E+G | Medium | ✅ Done |
+| I | Native expander bootstrap | Phase A-H | **Critical** | ⬜ |
+| II | Language features (match, iter, interface) | Phase I or gherkin | Hard | ⬜ |
+| III | Standard library coverage (~339 modules) | Phase II + FFI | Large | ⬜ |
+| IV | Gambit primitives (threading, ports, GC) | None | Hard | ⬜ |
+| V | Toolchain (gxc -exe, gerbil build, gxpkg) | Phase III | Medium | ⬜ |
 
-**Critical path:** A → B → D → E → F → H
+**Critical path (cross-compiler):** II → III → V (pragmatic, incremental)
 
-Phase C can proceed in parallel with A/B. Phase G depends on C and D.
+**Critical path (true self-hosting):** I → II → III → V (harder, but complete)
+
+Phase IV can proceed in parallel — each primitive mapped unblocks more std modules.
+
+---
+
+## Real-World Validation: gerbil-shell
+
+The gherkin cross-compiler has been validated on **gerbil-shell**, a POSIX shell implementation written in Gerbil Scheme:
+
+- **27 modules** compiled through gherkin in 7 dependency tiers
+- **30k+ lines** of Gerbil source translated to Chez Scheme
+- Features exercised: defstruct, defclass, match, hash tables, keyword args, string/list processing, process management, signal handling, job control, line editing, file I/O, pipes, redirects
+- Standalone binary via `compile-whole-program`
+- Passes echo, variables, arithmetic, pipes, functions, conditionals, loops tests
+- Repository: `~/mine/gherkin-shell` (gerbil-shell as submodule + compat layer + build scripts)
+
+This demonstrates gherkin handles real-world Gerbil code, not just toy examples.
 
 ---
 

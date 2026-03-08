@@ -28,7 +28,9 @@
     make-class-slot-accessor make-class-slot-mutator
     make-class-slot-unchecked-accessor make-class-slot-unchecked-mutator
     ;; instance operations
-    make-instance make-class-instance class-instance-init! class-instance?
+    make-instance make-class-instance
+    class-instance-init! struct-instance-init!
+    class-instance?
     struct-instance? direct-class-instance? direct-struct-instance?
     ;; slot operations
     slot-ref slot-set! unchecked-slot-ref unchecked-slot-set!
@@ -390,6 +392,14 @@
             (when idx
               (|##structure-set!| obj idx val))
             (lp (cddr rest)))))))
+
+  ;; struct-instance-init!: initialize struct fields positionally (starting at index 1)
+  (define (struct-instance-init! obj . args)
+    (let lp ((k 1) (rest args))
+      (when (pair? rest)
+        (|##structure-set!| obj k (car rest))
+        (lp (+ k 1) (cdr rest))))
+    obj)
 
   (define (class-instance? klass obj)
     (|##structure-instance-of?| obj (class-type-id klass)))
