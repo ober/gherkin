@@ -2763,7 +2763,8 @@
     ":std/lazy" ":std/contract" ":std/deprecation"
     ":std/hash-table" ":std/stxutil"
     ":std/source" ":std/generic" ":std/amb" ":std/assert"
-    ":std/cli/getopt" ":std/instance" ":std/config"))
+    ":std/cli/getopt" ":std/instance" ":std/config"
+    ":std/iter" ":std/coroutine"))
 
 (for-each (lambda (mod)
   (check (string-append "load " mod)
