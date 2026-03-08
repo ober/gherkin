@@ -897,12 +897,27 @@
   (eval '(gerbil-load-module ':std/sort))
   (check ":std/sort loads" (eval '(gerbil-module-loaded? "std/sort"))))
 
-;; Verify sort function is defined (implementation depends on include'd files)
+;; Verify sort function is defined and works (implementation depends on include'd files)
 (guard (exn [#t
   (printf "  sort error: ~a~n" (if (message-condition? exn) (condition-message exn) exn))
   (check "sort function defined" #f)])
   (let ([proc (eval 'sort)])
     (check "sort function defined" (procedure? proc))))
+
+;; Phase C: Verify include directive works — sort actually produces correct results
+(guard (exn [#t
+  (printf "  sort eval error: ~a~n" (if (message-condition? exn) (condition-message exn) exn))
+  (when (irritants-condition? exn)
+    (printf "    irritants: ~a~n" (condition-irritants exn)))
+  (check "sort produces correct results" #f)])
+  (let ([result (eval '(sort '(3 1 4 1 5 9 2 6) <))])
+    (check "sort produces correct results" (equal? result '(1 1 2 3 4 5 6 9)))))
+
+(guard (exn [#t
+  (printf "  stable-sort error: ~a~n" (if (message-condition? exn) (condition-message exn) exn))
+  (check "stable-sort works" #f)])
+  (let ([result (eval '(stable-sort '(5 3 1 4 2) <))])
+    (check "stable-sort works" (equal? result '(1 2 3 4 5)))))
 
 ;; Test 4: Load :std/values (depends on :std/sugar which has deep deps)
 (printf "~n--- Loading :std/values ---~n")

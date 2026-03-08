@@ -15,6 +15,7 @@
     sanitize-compiled
     resolve-import
     *default-import-map*
+    *current-source-dir*
     )
 
   (import
@@ -37,6 +38,10 @@
     (runtime eval)
     (only (reader reader)
           gerbil-read-file annotated-datum? annotated-datum-value))
+
+  ;; --- Current source directory for include resolution ---
+  ;; Set this before compiling a file to resolve (include "relative/path")
+  (define *current-source-dir* (make-parameter ""))
 
   ;; --- Compile-time macro table ---
   ;; Stores defrules/defrule macros for compile-time expansion
@@ -2791,12 +2796,21 @@
   ;; --- include compilation ---
   (define (compile-include form)
     ;; (include "file.ss") → read and compile the file's forms inline
+    ;; Resolves relative paths using *current-source-dir*
     (let ((path (cadr form)))
       (if (string? path)
-        (guard (exn
-                 [#t `(begin)]) ;; silently skip if file not found
-          (let ((forms (read-all-forms path)))
-            `(begin ,@(map gerbil-compile-top forms))))
+        (let ((resolved
+                (if (and (> (string-length path) 0)
+                         (char=? (string-ref path 0) #\/))
+                  path  ;; absolute path
+                  (let ((dir (*current-source-dir*)))
+                    (if (string=? dir "")
+                      path
+                      (string-append dir "/" path))))))
+          (guard (exn
+                   [#t `(begin)]) ;; silently skip if file not found
+            (let ((forms (read-all-forms resolved)))
+              `(begin ,@(map gerbil-compile-top forms)))))
         `(begin))))
 
   ;; --- defvalues compilation ---

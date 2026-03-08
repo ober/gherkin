@@ -28,7 +28,7 @@
     (runtime mop)
     (runtime syntax)
     (only (compiler compile) gerbil-compile-top gerbil-compile-expression
-          strip-annotations sanitize-compiled)
+          strip-annotations sanitize-compiled *current-source-dir*)
     (only (reader reader) gerbil-read-file annotated-datum? annotated-datum-value))
 
   ;; ============================================================
@@ -97,7 +97,13 @@
         "gerbil/compiler/optimize" "gerbil/compiler/ssxi"
         ;; Special: gerbil/expander is a meta-module
         "gerbil/expander" "gerbil/runtime"
-        "gerbil/core" "gerbil/compiler")))
+        "gerbil/core" "gerbil/compiler"))
+    ;; Restore Chez builtins that Gerbil's expander may have shadowed.
+    ;; Without this, (define-syntax ... (syntax-rules ...)) in loaded modules
+    ;; fails because Gerbil redefines syntax-rules with an incompatible version.
+    (eval '(import (only (chezscheme)
+             define-syntax syntax-rules syntax-case syntax with-syntax
+             define lambda let let* letrec letrec* begin if cond case))))
 
   ;; ============================================================
   ;; Module path resolution
@@ -302,35 +308,45 @@
     (when *verbose*
       (printf "  Loading module: ~a~n" mod-id))
 
-    (let* ([forms (read-gerbil-module source-path)]
+    ;; Extract source directory for include resolution
+    (let* ([source-dir (let ([s source-path])
+                         (let lp ([i (- (string-length s) 1)])
+                           (cond
+                             [(< i 0) ""]
+                             [(char=? (string-ref s i) #\/)
+                              (substring s 0 i)]
+                             [else (lp (- i 1))])))]
+           [forms (read-gerbil-module source-path)]
            [stripped (map (lambda (f)
                            (if (annotated-datum? f)
                              (strip-annotations (annotated-datum-value f))
                              (strip-annotations f)))
                          forms)]
            ;; Pre-pass: register defrules/defrule for compile-time expansion
-           [_ (for-each
-                (lambda (form)
-                  (when (and (pair? form) (memq (car form) '(defrules defrule)))
-                    (guard (exn [#t (void)])
-                      (gerbil-compile-top form))))
-                stripped)]
+           [_ (parameterize ([*current-source-dir* source-dir])
+                (for-each
+                  (lambda (form)
+                    (when (and (pair? form) (memq (car form) '(defrules defrule)))
+                      (guard (exn [#t (void)])
+                        (gerbil-compile-top form))))
+                  stripped))]
            ;; Compile, skipping import/export and empty begins
            [compiled
-            (let loop ([forms stripped] [result '()])
-              (if (null? forms)
-                (reverse result)
-                (let ([form (car forms)])
-                  (guard (exn [#t
-                    (loop (cdr forms) result)])
-                    (let ([c (gerbil-compile-top form)])
-                      (cond
-                        [(and (pair? c) (memq (car c) '(import export)))
-                         (loop (cdr forms) result)]
-                        [(equal? c '(begin))
-                         (loop (cdr forms) result)]
-                        [else
-                         (loop (cdr forms) (cons c result))]))))))]
+            (parameterize ([*current-source-dir* source-dir])
+              (let loop ([forms stripped] [result '()])
+                (if (null? forms)
+                  (reverse result)
+                  (let ([form (car forms)])
+                    (guard (exn [#t
+                      (loop (cdr forms) result)])
+                      (let ([c (gerbil-compile-top form)])
+                        (cond
+                          [(and (pair? c) (memq (car c) '(import export)))
+                           (loop (cdr forms) result)]
+                          [(equal? c '(begin))
+                           (loop (cdr forms) result)]
+                          [else
+                           (loop (cdr forms) (cons c result))])))))))]
            [error-count 0])
 
       ;; Write compiled output

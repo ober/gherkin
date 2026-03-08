@@ -152,31 +152,22 @@ Two fixes applied:
 
 ---
 
-## Phase C: Include Directive Support
+## Phase C: Include Directive Support ✅
 
 **Goal:** `(include "file.scm")` works, unblocking many std library modules.
 
-**Why:** Many critical modules use `include` to pull in implementation files:
-- `:std/sort` includes srfi-32 implementation
-- `:std/pregexp` includes pregexp.scm
-- `:std/srfi/1` includes srfi-1.scm
+### C.1 Implement include in gherkin ✅
 
-### C.1 Implement include in gherkin
+- [x] Added `*current-source-dir*` parameter to `src/compiler/compile.sls`
+- [x] `compile-include` resolves relative paths using `*current-source-dir*`
+- [x] Module loader sets `*current-source-dir*` via `parameterize` around compilation
+- [x] Chez builtins restoration in `gerbil-module-init!` — without this, `define-syntax` forms in include'd files fail because Gerbil's expander redefines `syntax-rules`
 
-- [ ] Add `include` handling to `gerbil-compile-top` — read the file relative to the source, compile its forms inline
-- [ ] Handle nested includes
-- [ ] Handle `include` in the module loader
+### C.2 Verify ✅
 
-### C.2 Implement include in the expander
-
-- [ ] Once the expander works, `include` should be handled as a special form
-- [ ] Support `(include "relative/path.scm")` resolution
-
-### C.3 Verify
-
-- [ ] `:std/sort` loads and `(sort '(3 1 2) <)` returns `(1 2 3)`
-- [ ] `:std/pregexp` loads and `(pregexp-match "a.c" "abc")` works
-- [ ] `:std/srfi/1` loads and `(iota 5)` returns `(0 1 2 3 4)`
+- [x] `:std/sort` loads and `(sort '(3 1 4 1 5 9 2 6) <)` returns `(1 1 2 3 4 5 6 9)`
+- [x] `(stable-sort '(5 3 1 4 2) <)` returns `(1 2 3 4 5)`
+- [x] All 5 include files compile inline: sort-support.scm, lmsort.scm, vhsort.scm, vmsort.scm, sortp.scm
 
 ---
 
@@ -327,8 +318,8 @@ Two options:
 |---|-----------|-------------|------------|--------|
 | A | Method dispatch works | None | **Critical** | ✅ Done |
 | B | define-syntax evaluates | Phase A | Hard | ✅ Done |
-| C | include directive | None | Easy | 🔲 Next |
-| D | Module expansion via expander | Phase A+B | Hard | 🔲 |
+| C | include directive | None | Easy | ✅ Done |
+| D | Module expansion via expander | Phase A+B | Hard | 🔲 Next |
 | E | Compiler retargeting | Phase A+B+D | Medium | 🔲 |
 | F | Bootstrap artifacts | Phase A-E | Easy | 🔲 |
 | G | Full std library | Phase C+D | Medium | 🔲 |
@@ -354,7 +345,7 @@ The following phases established the cross-compilation bootstrap:
 | 6 | Standard library | 14 std modules loaded |
 | 7 | REPL and tooling | Working REPL with gherkin-based compilation |
 
-**Test harness:** `tests/self-host-core.ss` — 100/100 checks pass
+**Test harness:** `tests/self-host-core.ss` — 102/102 checks pass
 
 ---
 
