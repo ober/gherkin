@@ -213,9 +213,103 @@
   ;; --- Top-level form compilation ---
   ;; Takes a Gerbil s-expression and returns a Chez s-expression
 
+  ;; Check if a symbol is a %# core form (like %#quote, %#if, etc.)
+  (define (core-form-symbol? sym)
+    (and (symbol? sym)
+         (let ([s (symbol->string sym)])
+           (and (>= (string-length s) 2)
+                (char=? (string-ref s 0) #\%)
+                (string=? (substring s 1 2) "#")))))
+
+  ;; Get the plain name from a %# core form symbol
+  (define (core-form-name sym)
+    (let ([s (symbol->string sym)])
+      (string->symbol (substring s 2 (string-length s)))))
+
+  ;; Match a core form head against a known name
+  (define (core-form=? head name)
+    (and (core-form-symbol? head)
+         (string=? (symbol->string (core-form-name head)) name)))
+
+  ;; Translate expanded Gerbil core forms (%#xxx) back to plain Gerbil
+  ;; This is needed when the Gerbil expander produces core forms and we
+  ;; need to compile them through gherkin.
+  (define (core-form->gerbil form)
+    (cond
+      [(not (pair? form)) form]
+      [else
+       (let ([head (car form)])
+         (cond
+           [(core-form=? head "quote") `(quote ,(cadr form))]
+           [(core-form=? head "if")
+            `(if ,(core-form->gerbil (cadr form))
+                 ,(core-form->gerbil (caddr form))
+                 ,@(if (null? (cdddr form)) '()
+                       (list (core-form->gerbil (cadddr form)))))]
+           [(core-form=? head "ref") (cadr form)]
+           [(core-form=? head "set!")
+            `(set! ,(cadr form) ,(core-form->gerbil (caddr form)))]
+           [(core-form=? head "lambda")
+            `(lambda ,(cadr form) ,@(map core-form->gerbil (cddr form)))]
+           [(core-form=? head "case-lambda")
+            `(case-lambda ,@(map (lambda (clause)
+                                   (cons (car clause)
+                                         (map core-form->gerbil (cdr clause))))
+                                 (cdr form)))]
+           [(core-form=? head "let-values")
+            `(let-values ,(map (lambda (binding)
+                                 (list (car binding) (core-form->gerbil (cadr binding))))
+                               (cadr form))
+               ,@(map core-form->gerbil (cddr form)))]
+           [(core-form=? head "letrec-values")
+            `(letrec-values ,(map (lambda (binding)
+                                    (list (car binding) (core-form->gerbil (cadr binding))))
+                                  (cadr form))
+               ,@(map core-form->gerbil (cddr form)))]
+           [(core-form=? head "letrec*-values")
+            `(letrec*-values ,(map (lambda (binding)
+                                     (list (car binding) (core-form->gerbil (cadr binding))))
+                                   (cadr form))
+               ,@(map core-form->gerbil (cddr form)))]
+           [(core-form=? head "begin")
+            `(begin ,@(map core-form->gerbil (cdr form)))]
+           [(core-form=? head "begin-annotation")
+            (core-form->gerbil (caddr form))]
+           [(core-form=? head "define-values")
+            (let ([ids (cadr form)]
+                  [expr (core-form->gerbil (caddr form))])
+              (if (and (pair? ids) (null? (cdr ids)))
+                `(define ,(car ids) ,expr)
+                `(define-values ,ids ,expr)))]
+           [(core-form=? head "define-syntax")
+            `(define-syntax ,(cadr form) ,(core-form->gerbil (caddr form)))]
+           [(core-form=? head "define-alias")
+            `(define ,(cadr form) ,(caddr form))]
+           [(core-form=? head "call")
+            `(,(core-form->gerbil (cadr form)) ,@(map core-form->gerbil (cddr form)))]
+           [(core-form=? head "quote-syntax")
+            `(quote ,(cadr form))]
+           [(core-form=? head "struct-ref")
+            `(|##structure-ref| ,(core-form->gerbil (cadr form)) ,(caddr form))]
+           [(core-form=? head "struct-set!")
+            `(|##structure-set!| ,(core-form->gerbil (cadr form)) ,(caddr form)
+               ,(core-form->gerbil (cadddr form)))]
+           [(core-form=? head "import") '(begin)]
+           [(core-form=? head "export") '(begin)]
+           ;; Unknown %# form — strip prefix and recurse
+           [(core-form-symbol? head)
+            (let ([plain (core-form-name head)])
+              `(,plain ,@(map core-form->gerbil (cdr form))))]
+           ;; Not a core form — recurse on subforms
+           [else (map core-form->gerbil form)]))]))
+
   (define (gerbil-compile-top form)
     (cond
       ((not (pair? form)) form)
+      ;; Handle expanded core forms from the Gerbil expander
+      ((core-form-symbol? (car form))
+       (let ([plain (core-form->gerbil form)])
+         (gerbil-compile-top plain)))
       (else
        (let ((head (car form)))
          (cond

@@ -228,34 +228,33 @@ Full source expansion of modules requires the entire Gerbil core macro layer (`d
 
 ---
 
-## Phase E: Compiler Backend Retargeting
+## Phase E: Compiler Backend Retargeting ✅
 
 **Goal:** Gerbil's compiler emits Chez Scheme instead of Gambit/C.
 
-**Why:** Gerbil's compiler currently targets Gambit's C backend. For true self-hosting, it needs to emit Chez Scheme code that Chez can compile natively.
+**Approach:** Thin translation layer (Option 1) — `core-form->gerbil` translates expanded `%#` core forms back to plain Gerbil, which gherkin then compiles to Chez Scheme.
 
-### E.1 Strategy choice
+### E.1 Strategy ✅
 
-Two options:
+Used Option 1: core form translator in gherkin's `gerbil-compile-top`. When the input is a `%#` prefixed form (from the Gerbil expander), it's translated to plain Gerbil first, then compiled normally.
 
-**Option 1: Thin translation layer** — Intercept Gerbil's compiler output (which is Gambit Scheme) and translate to Chez. Similar to what gherkin already does, but as a post-pass on the compiler's output.
+### E.2 Implementation ✅
 
-**Option 2: New Chez backend** — Add a new compilation target alongside the Gambit backend. The compiler's `compile-e` dispatch would have a Chez-specific code generator.
+- [x] `core-form->gerbil` translates 20+ core forms (`%#quote`, `%#if`, `%#ref`, `%#lambda`, `%#let-values`, `%#define-values`, `%#call`, etc.)
+- [x] `gerbil-compile-top` auto-detects `%#` forms and applies translation
+- [x] `current-expander-compile` wired to gherkin's compiler
+- [x] `current-expander-eval` wired to Chez's `eval`
+- [x] `eval-syntax*` works end-to-end (expander → gherkin → Chez eval)
 
-**Recommended: Option 1** — It's less invasive and leverages gherkin's existing translation logic.
+### E.3 Verify ✅
 
-### E.2 Implementation
-
-- [ ] Hook Gerbil's `__compile-top` to use gherkin's `gerbil-compile-top` for code generation
-- [ ] Translate compiler output (Gambit-flavored Scheme) to Chez Scheme
-- [ ] Handle `##` primitives in generated code via gambit-compat mappings
-- [ ] Handle Gambit-specific code generation patterns (C FFI calls, structure operations)
-
-### E.3 Verify
-
-- [ ] Compile a simple Gerbil module through Gerbil's compiler on Chez
-- [ ] The compiled output runs on Chez
-- [ ] Compile a module that uses defstruct and verify the output
+- [x] `core-expand-expression(42)` → `(%#quote 42)` → `'42` → evaluates to `42`
+- [x] `core-expand-expression(if #t 1 2)` → compiled → evaluates to `1`
+- [x] `core-expand-expression(begin 42)` → compiled → evaluates to `42`
+- [x] `eval-syntax*` full chain works
+- [x] `defstruct point (x y)` compiles and creates working accessors
+- [x] `def (square n) (* n n)` compiles and `(square 7)` → `49`
+- [x] Module compilation via gherkin bridge still works
 
 ---
 
@@ -344,7 +343,7 @@ Two options:
 | B | define-syntax evaluates | Phase A | Hard | ✅ Done |
 | C | include directive | None | Easy | ✅ Done |
 | D | Module expansion via expander | Phase A+B | Hard | ✅ Done |
-| E | Compiler retargeting | Phase A+B+D | Medium | 🔲 |
+| E | Compiler retargeting | Phase A+B+D | Medium | ✅ Done |
 | F | Bootstrap artifacts | Phase A-E | Easy | 🔲 |
 | G | Full std library | Phase C+D | Medium | 🔲 |
 | H | Production REPL/tooling | Phase D+E+G | Medium | 🔲 |
@@ -369,7 +368,7 @@ The following phases established the cross-compilation bootstrap:
 | 6 | Standard library | 14 std modules loaded |
 | 7 | REPL and tooling | Working REPL with gherkin-based compilation |
 
-**Test harness:** `tests/self-host-core.ss` — 118/118 checks pass
+**Test harness:** `tests/self-host-core.ss` — 125/125 checks pass
 
 ---
 

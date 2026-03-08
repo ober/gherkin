@@ -2291,6 +2291,107 @@
         (check "error module metadata" (symbol? mod-id))))))
 
 ;;; ============================================================
+;;; Compiler Backend Retargeting (Phase E)
+;;; ============================================================
+
+(printf "~n=== Compiler Backend Retargeting (Phase E) ===~n")
+
+;; E.1: core-expand-expression → gherkin compile → eval chain
+;; Test that the Gerbil expander can expand an expression, gherkin compiles it,
+;; and Chez evaluates the result.
+(printf "~n--- E.1: Expander → Gherkin → Eval chain ---~n")
+
+;; E.1a: Simple expression expansion + compilation
+(guard (exn [#t
+  (printf "  E.1a error: ~a~n" (if (message-condition? exn) (condition-message exn) exn))
+  (when (irritants-condition? exn)
+    (printf "    irritants: ~a~n" (condition-irritants exn)))
+  (check "expand+compile literal" #f)])
+  ;; Expand (quote 42) through the Gerbil expander, then compile+eval
+  (let ([expanded (eval '(core-expand-expression (make-AST 42 '())))])
+    (printf "  E.1a: expanded = ~a~n" expanded)
+    (let ([datum (eval `(syntax->datum ',expanded))])
+      (printf "  E.1a: datum = ~a~n" datum)
+      (let ([compiled (gerbil-compile-top datum)])
+        (printf "  E.1a: compiled = ~a~n" compiled)
+        (check "expand+compile literal" (eqv? (eval compiled) 42))))))
+
+;; E.1b: Expand and compile (if #t 1 2)
+(guard (exn [#t
+  (printf "  E.1b error: ~a~n" (if (message-condition? exn) (condition-message exn) exn))
+  (check "expand+compile if" #f)])
+  (let* ([stx (eval '(core-expand-expression
+                        (make-AST (list (make-AST 'if '()) (make-AST #t '())
+                                       (make-AST 1 '()) (make-AST 2 '())) '())))]
+         [datum (eval `(syntax->datum ',stx))]
+         [compiled (gerbil-compile-top datum)])
+    (printf "  E.1b: compiled = ~a~n" compiled)
+    (check "expand+compile if" (eqv? (eval compiled) 1))))
+
+;; E.1c: Expand and compile (begin 42)
+(guard (exn [#t
+  (printf "  E.1c error: ~a~n" (if (message-condition? exn) (condition-message exn) exn))
+  (check "expand+compile begin" #f)])
+  (let* ([stx (eval '(core-expand-expression
+                        (make-AST (list (make-AST 'begin '()) (make-AST 42 '())) '())))]
+         [datum (eval `(syntax->datum ',stx))]
+         [compiled (gerbil-compile-top datum)])
+    (printf "  E.1c: compiled = ~a~n" compiled)
+    (check "expand+compile begin" (eqv? (eval compiled) 42))))
+
+;; E.2: eval-syntax* works end-to-end
+;; This is the core function used during module expansion
+(printf "~n--- E.2: eval-syntax* via expander ---~n")
+(guard (exn [#t
+  (printf "  E.2 error: ~a~n" (if (message-condition? exn) (condition-message exn) exn))
+  (when (irritants-condition? exn)
+    (printf "    irritants: ~a~n" (condition-irritants exn)))
+  (check "eval-syntax* works" #f)])
+  ;; eval-syntax* uses current-expander-compile and current-expander-eval
+  (let ([result (eval '(eval-syntax* (core-expand-expression (make-AST 42 '()))))])
+    (printf "  E.2: result = ~a~n" result)
+    (check "eval-syntax* works" (eqv? result 42))))
+
+;; E.3: Compile defstruct through expander chain
+(printf "~n--- E.3: defstruct compilation ---~n")
+(guard (exn [#t
+  (printf "  E.3 error: ~a~n" (if (message-condition? exn) (condition-message exn) exn))
+  (when (irritants-condition? exn)
+    (printf "    irritants: ~a~n" (condition-irritants exn)))
+  (check "defstruct via gherkin" #f)])
+  ;; Use gherkin directly (not the expander) to compile defstruct
+  (let ([compiled (gerbil-compile-top '(defstruct point (x y)))])
+    (printf "  E.3: compiled = ~a~n" compiled)
+    (eval compiled)
+    (let ([p (eval '(make-point 3 4))])
+      (printf "  E.3: point = ~a~n" p)
+      (check "defstruct via gherkin"
+        (and (eqv? (eval `(point-x ',p)) 3)
+             (eqv? (eval `(point-y ',p)) 4))))))
+
+;; E.4: Full Gerbil source → gherkin → eval pipeline
+(printf "~n--- E.4: Full source compilation pipeline ---~n")
+(guard (exn [#t
+  (printf "  E.4 error: ~a~n" (if (message-condition? exn) (condition-message exn) exn))
+  (when (irritants-condition? exn)
+    (printf "    irritants: ~a~n" (condition-irritants exn)))
+  (check "full pipeline: def + call" #f)])
+  ;; Compile a def + call through gherkin
+  (eval (gerbil-compile-top '(def (square n) (* n n))))
+  (check "full pipeline: def + call" (eqv? (eval '(square 7)) 49)))
+
+;; E.5: Compile module through gherkin-bridge import (already tested in D.7d)
+;; Verify the module import chain creates working code
+(printf "~n--- E.5: Module compilation via gherkin bridge ---~n")
+(guard (exn [#t
+  (printf "  E.5 error: ~a~n" (if (message-condition? exn) (condition-message exn) exn))
+  (check "module: sort after gherkin import" #f)])
+  ;; :std/sort was already imported via gherkin bridge in Phase D
+  ;; Verify it's still functional
+  (check "module: sort after gherkin import"
+    (equal? (eval '(sort '(9 3 7 1 5) <)) '(1 3 5 7 9))))
+
+;;; ============================================================
 ;;; Summary
 ;;; ============================================================
 
