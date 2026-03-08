@@ -115,13 +115,13 @@
 
   (define (module-id->path mod-id)
     "Convert module ID (e.g., 'std/sugar') to source file path."
-    (let ([src-path (string-append *gerbil-src-dir* mod-id ".ss")])
-      (if (file-exists? src-path)
-        src-path
-        ;; Try without .ss (directory with same name)
-        (let ([dir-path (string-append *gerbil-src-dir* mod-id "/")])
-          (if (file-exists? dir-path)
-            #f  ;; directory module, not a file
+    (let ([ss-path (string-append *gerbil-src-dir* mod-id ".ss")])
+      (if (file-exists? ss-path)
+        ss-path
+        ;; Try .scm (some Gerbil modules use .scm extension)
+        (let ([scm-path (string-append *gerbil-src-dir* mod-id ".scm")])
+          (if (file-exists? scm-path)
+            scm-path
             #f)))))
 
   ;; Current module being loaded (for resolving relative imports)
