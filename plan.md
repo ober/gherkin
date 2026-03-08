@@ -36,9 +36,9 @@ We have a working cross-compiler (gherkin) and bootstrap environment:
 | Expander (9 files) | 100% | ✅ Works | `core-expand-expression` works, method dispatch fixed |
 | Core macros (10 files) | 100% | ⚠️ Partial | `define-syntax` forms skip (need expander) |
 | Compiler (12 files) | 100% | ⚠️ Partial | `define-syntax` forms skip |
-| Module system | ✅ Loader works | ✅ **376 std modules** | All non-test .ss files compile and load |
+| Module system | ✅ Loader works | ✅ **37 std modules** | Curated subset compile and load via module loader |
 | REPL | ✅ Works | ✅ Gerbil syntax | Uses gherkin for compilation |
-| Test suite | **563 checks** | ✅ All pass | Compilation + loader + functionality |
+| Test suite | **227 checks** | ✅ All pass | Compilation + loader + functionality |
 
 **Phase A complete**: `core-expand-expression` works — method dispatch on expander structs is fully operational. The fix required (1) injecting `##type` and `##closure?` Gambit primitives for hash table operations at eval time, and (2) replacing `{method obj}` syntax with `(call-method obj 'method)` in eval'd context constructors since `{}` isn't a Chez reader feature.
 
@@ -496,7 +496,7 @@ Gerbil's `match` is a complex macro. Gherkin handles common cases (literal patte
 
 ### III. Standard Library Coverage
 
-~339 non-test modules in `:std/`, ~12 currently working through gherkin bridge + 43 compat shims.
+~339 non-test modules in `:std/`, **37 verified via module loader** (compile + load + eval), plus 43 compat shims.
 
 #### III.1 Pure Scheme (easiest — no FFI, no heavy macros)
 
@@ -514,44 +514,44 @@ Gerbil's `match` is a complex macro. Gherkin handles common cases (literal patte
 | `:std/misc/func` | ✅ Working | |
 | `:std/misc/completion` | ✅ Working | |
 | `:std/text/hex` | ✅ Working | |
-| `:std/format` | ⬜ Not started | Uses `include` for format.scm |
-| `:std/pregexp` | ⚠️ Partial | Include'd pregexp.scm has Gerbil error class deps |
-| `:std/hash-table` | ✅ Compiles | 0 compile errors |
-| `:std/misc/string` | ✅ Compiles | 0 compile errors, needs :gerbil/gambit imports |
-| `:std/misc/list` | ✅ Compiles | 0 compile errors |
-| `:std/misc/path` | ✅ Compiles | 0 compile errors |
-| `:std/misc/hash` | ✅ Compiles | 0 compile errors |
-| `:std/misc/bytes` | ⚠️ Partial | Compiles, but heavy u8vector/Gambit deps |
-| `:std/misc/number` | ✅ Compiles | 0 compile errors |
-| `:std/misc/ports` | ✅ Compiles | 0 compile errors |
+| `:std/format` | ✅ Working | Loads via module loader |
+| `:std/pregexp` | ✅ Working | Loads via module loader |
+| `:std/hash-table` | ✅ Working | Loads via module loader |
+| `:std/misc/string` | ✅ Working | Loads via module loader |
+| `:std/misc/list` | ✅ Working | Loads via module loader |
+| `:std/misc/path` | ✅ Working | Loads via module loader |
+| `:std/misc/hash` | ✅ Working | Loads via module loader |
+| `:std/misc/bytes` | ✅ Working | Loads via module loader |
+| `:std/misc/number` | ✅ Working | Loads via module loader |
+| `:std/misc/ports` | ✅ Working | Loads via module loader |
 | `:std/misc/queue` | ✅ Working | Compile + eval verified |
 | `:std/misc/deque` | ✅ Working | Compile + eval verified |
 | `:std/misc/pqueue` | ✅ Working | Compile + eval verified |
-| `:std/misc/shuffle` | ✅ Compiles | 0 compile errors |
-| `:std/misc/atom` | ✅ Compiles | 0 compile errors |
-| `:std/misc/walist` | ✅ Compiles | 0 compile errors |
-| `:std/misc/channel` | ✅ Compiles | 0 compile errors |
-| `:std/misc/timeout` | ✅ Compiles | 0 compile errors |
-| `:std/misc/lru` | ✅ Compiles | 0 compile errors |
+| `:std/misc/shuffle` | ✅ Working | Loads via module loader |
+| `:std/misc/atom` | ✅ Working | Loads via module loader |
+| `:std/misc/walist` | ✅ Working | Loads via module loader |
+| `:std/misc/channel` | ✅ Compiles | Needs threading primitives |
+| `:std/misc/timeout` | ✅ Compiles | Needs threading primitives |
+| `:std/misc/lru` | ✅ Working | Loads via module loader |
 | `:std/misc/rbtree` | ✅ Compiles | 0 compile errors |
-| `:std/misc/repr` | ✅ Compiles | 0 compile errors |
-| `:std/srfi/1` | ✅ Compiles | 0 compile errors |
-| `:std/srfi/8` | ✅ Compiles | receive macro |
-| `:std/srfi/9` | ⬜ Not started | define-record-type |
-| `:std/srfi/13` | ✅ Compiles | 0 compile errors |
-| `:std/srfi/14` | ✅ Compiles | char-sets |
+| `:std/misc/repr` | ✅ Working | Loads via module loader |
+| `:std/srfi/1` | ✅ Working | Loads via module loader |
+| `:std/srfi/8` | ✅ Working | Loads via module loader |
+| `:std/srfi/9` | ✅ Working | Loads via module loader |
+| `:std/srfi/13` | ✅ Working | Loads via module loader |
+| `:std/srfi/14` | ✅ Working | Loads via module loader |
 | `:std/srfi/41` | ✅ Compiles | streams |
-| `:std/srfi/43` | ✅ Compiles | vector-lib |
-| `:std/sugar` | ✅ Compiles | 0 compile errors |
+| `:std/srfi/43` | ✅ Working | Loads via module loader |
+| `:std/sugar` | ✅ Working | Loads via module loader |
 | `:std/cli/getopt` | ✅ Compiles | 0 compile errors |
 
 #### III.2 Text processing (moderate — mostly pure Scheme)
 
 | Module | Status | Notes |
 |--------|--------|-------|
-| `:std/text/json` | ⬜ Not started | 6 sub-modules, pure Scheme parser/writer |
-| `:std/text/csv` | ✅ Compiles | 0 compile errors |
-| `:std/text/base64` | ⬜ Not started | Reader error |
+| `:std/text/json` | ✅ Working | Loads via module loader (with sub-module deps) |
+| `:std/text/csv` | ✅ Working | Loads via module loader |
+| `:std/text/base64` | ✅ Working | .scm file, loads via module loader |
 | `:std/text/utf8` | ✅ Compiles | 0 compile errors |
 | `:std/text/hex` | ✅ Compiles | 0 compile errors |
 | `:std/text/utf16` | ⬜ Not started | |
@@ -765,7 +765,7 @@ The following phases established the cross-compilation bootstrap:
 | 6 | Standard library | 14 std modules loaded |
 | 7 | REPL and tooling | Working REPL with gherkin-based compilation |
 
-**Test harness:** `tests/self-host-core.ss` — 152/152 checks pass
+**Test harness:** `tests/self-host-core.ss` — 227/227 checks pass
 
 ---
 

@@ -365,6 +365,12 @@
            ;;   (def predicate? Name?)
            ((eq? head 'deferror-class)
             (compile-deferror-class form))
+           ;; defgeneric — :std/generic generic function definition
+           ;; (defgeneric name body) → (define name body)
+           ((eq? head 'defgeneric)
+            (let ([name (cadr form)]
+                  [body (caddr form)])
+              `(define ,name ,(gerbil-compile-expression body))))
            ;; defstruct-type — Gerbil runtime struct type declaration
            ;; (defstruct-type type::t (super::t) make-fn pred?
            ;;   id: type-id name: display-name)
