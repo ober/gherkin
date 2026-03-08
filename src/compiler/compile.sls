@@ -255,6 +255,28 @@
            ((eq? head 'defruntime-exceptions)
             `(begin ,@(map (lambda (f) (compile-defruntime-exception `(defruntime-exception ,f)))
                            (cdr form))))
+           ;; module — nested module form
+           ;; (module Name body...) or (module Name (export ...) body...)
+           ;; Compile body forms, stripping import/export
+           ((eq? head 'module)
+            (if (and (pair? (cdr form)) (pair? (cddr form)))
+              (let* ((body (cddr form))
+                     (compiled (map gerbil-compile-top body))
+                     ;; Strip import/export/empty-begin from module bodies
+                     (filtered (filter
+                                 (lambda (c)
+                                   (not (or (and (pair? c) (memq (car c) '(import export)))
+                                            (equal? c '(begin)))))
+                                 compiled)))
+                (if (null? filtered)
+                  '(begin)
+                  `(begin ,@filtered)))
+              '(begin)))
+           ;; define-alias / defalias — (define-alias new-name old-name)
+           ((memq head '(define-alias defalias))
+            (if (and (pair? (cdr form)) (pair? (cddr form)))
+              `(define ,(cadr form) ,(caddr form))
+              '(begin)))
            ;; begin
            ((eq? head 'begin)
             (cons 'begin (map gerbil-compile-top (cdr form))))
@@ -276,6 +298,12 @@
            ;; declare / declare-inline
            ((memq head '(declare declare-inline))
             '(begin)) ;; ignore declarations
+           ;; begin-syntax — compile-time definitions, treat as begin
+           ((eq? head 'begin-syntax)
+            (cons 'begin (map gerbil-compile-top (cdr form))))
+           ;; begin-foreign — FFI declarations, pass through body
+           ((eq? head 'begin-foreign)
+            (cons 'begin (map gerbil-compile-top (cdr form))))
            ;; begin-annotation — strip annotation, keep body
            ((eq? head 'begin-annotation)
             (if (and (pair? (cdr form)) (pair? (cddr form)))
@@ -572,8 +600,8 @@
       (else
        (let ((head (car expr)))
          (cond
-           ;; lambda
-           ((eq? head 'lambda)
+           ;; lambda / lambda%
+           ((memq head '(lambda lambda%))
             (compile-lambda expr))
            ;; case-lambda
            ((eq? head 'case-lambda)
@@ -1280,10 +1308,24 @@
   ;; Walk compiled S-expression tree and replace keyword-objects with symbols.
   ;; This is needed because match/defrules expansions can embed keyword-object
   ;; records that Chez's reader can't parse back from pretty-printed output.
+  (define chez-void-value (chez:void))
+
   (define (sanitize-compiled form)
     (cond
       [(|##keyword?| form)
        (string->symbol (string-append (|##keyword->string| form) ":"))]
+      ;; Handle Chez void (special-value) — replace with (void) call
+      [(eq? form chez-void-value) '(void)]
+      ;; Handle absent-obj — replace with symbolic reference
+      [(absent-obj? form) 'absent-obj]
+      ;; Handle gerbil-struct objects — replace with a quoted placeholder
+      [(gerbil-struct? form)
+       (let ([tag (gerbil-struct-type-tag form)])
+         (list 'quote (string->symbol
+                        (string-append "#<" (if (and tag (gerbil-struct? tag))
+                                              (let ([name (|##structure-ref| tag 2)])
+                                                (if (symbol? name) (symbol->string name) "struct"))
+                                              "struct") ">"))))]
       [(pair? form)
        (let ([a (sanitize-compiled (car form))]
              [d (sanitize-compiled (cdr form))])
@@ -1296,6 +1338,27 @@
          (if (equal? lst sanitized)
            form
            (list->vector sanitized)))]
+      ;; Handle other non-printable objects (records, procedures, opaque types)
+      [(record? form) (list 'quote (string->symbol "unreadable-record"))]
+      [(procedure? form) (list 'quote (string->symbol "unreadable-procedure"))]
+      ;; Catch-all: check if the value is writable, replace if not
+      [(not (or (symbol? form) (number? form) (string? form)
+                (boolean? form) (char? form) (null? form)
+                (eq? form chez-void-value)))
+       ;; Check if it's writable by attempting to write it
+       (let ([writable?
+              (guard (exn [#t #f])
+                (let ([s (call-with-string-output-port
+                           (lambda (p) (write form p)))])
+                  ;; Check for #< in the output (unreadable)
+                  (not (let lp ([i 0])
+                         (and (< i (- (string-length s) 1))
+                              (or (and (char=? (string-ref s i) #\#)
+                                       (char=? (string-ref s (+ i 1)) #\<))
+                                  (lp (+ i 1))))))))])
+         (if writable?
+           form
+           (list 'quote (string->symbol "unreadable-value"))))]
       [else form]))
 
   ;; --- Body compilation ---
