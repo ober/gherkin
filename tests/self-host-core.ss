@@ -2752,6 +2752,8 @@
     ":std/srfi/121" ":std/srfi/127" ":std/srfi/128"
     ":std/srfi/130" ":std/srfi/132" ":std/srfi/133"
     ":std/srfi/134" ":std/srfi/135"
+    ":std/srfi/141" ":std/srfi/143" ":std/srfi/145"
+    ":std/srfi/151" ":std/srfi/78" ":std/srfi/113"
     ;; text
     ":std/text/hex" ":std/text/utf8" ":std/text/csv" ":std/text/base64"
     ":std/text/json"
@@ -2759,7 +2761,8 @@
     ":std/error" ":std/sort" ":std/sugar"
     ":std/values" ":std/format" ":std/pregexp"
     ":std/lazy" ":std/contract" ":std/deprecation"
-    ":std/hash-table" ":std/stxutil"))
+    ":std/hash-table" ":std/stxutil"
+    ":std/source" ":std/generic" ":std/amb" ":std/assert"))
 
 (for-each (lambda (mod)
   (check (string-append "load " mod)
