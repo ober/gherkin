@@ -752,8 +752,66 @@
   (check "module-sugar partial load" #t))
 
 ;;; ============================================================
+;;; Compile and evaluate compiler files (Phase 5)
+;;; ============================================================
+
+(printf "~n=== Loading Compiler (Phase 5) ===~n")
+
+(define compiler-src-dir
+  (let ([home (getenv "HOME")])
+    (string-append home "/mine/gerbil/src/gerbil/compiler/")))
+
+(define compiler-files
+  '("base.ss" "compile.ss" "driver.ss" "method.ss"
+    "optimize-base.ss" "optimize-xform.ss" "optimize-top.ss"
+    "optimize-call.ss" "optimize-spec.ss" "optimize-ann.ss"
+    "optimize.ss" "ssxi.ss"))
+
+(define (compile-and-load-compiler filename)
+  (printf "~n--- ~a ---~n" filename)
+  (let ([forms (compile-file compiler-src-dir filename)])
+    (check (string-append filename " compiles") (and forms (pair? forms)))
+    (when forms
+      (printf "  (~a compiled forms)~n" (length forms))
+      (let ([ok (load-file filename)])
+        (check (string-append filename " evaluates") ok)))))
+
+(for-each compile-and-load-compiler compiler-files)
+
+;;; Phase 5 Verification
+(printf "~n=== Phase 5 Verification ===~n")
+
+;; Check that compiler types are defined (from base.ss)
+(guard (exn [#t
+  (printf "  compiler types error: ~a~n" (if (message-condition? exn) (condition-message exn) exn))
+  (check "symbol-table::t defined" #f)])
+  (let ([t (eval 'symbol-table::t)])
+    (check "symbol-table::t defined" (and t (|##structure?| t)))))
+
+;; Check that core compiler functions exist (from compile.ss)
+(guard (exn [#t
+  (printf "  compile-e error: ~a~n" (if (message-condition? exn) (condition-message exn) exn))
+  (check "compile-e defined" #f)])
+  (let ([proc (eval 'compile-e)])
+    (check "compile-e defined" (procedure? proc))))
+
+;; Check that method compiler functions exist (from method.ss)
+(guard (exn [#t
+  (printf "  generate-method error: ~a~n" (if (message-condition? exn) (condition-message exn) exn))
+  (check "generate-method-* defined" #f)])
+  (let ([proc (eval 'void-method)])
+    (check "generate-method-* defined" (procedure? proc))))
+
+;; Check optimizer types
+(guard (exn [#t
+  (printf "  optimizer error: ~a~n" (if (message-condition? exn) (condition-message exn) exn))
+  (check "optimizer types defined" #f)])
+  (let ([t (eval '!alias::t)])
+    (check "optimizer types defined" (and t (|##structure?| t)))))
+
+;;; ============================================================
 ;;; Summary
 ;;; ============================================================
 
-(printf "~n--- Self-Host Core: ~a passed, ~a failed ---~n"
+(printf "~n--- Self-Host: ~a passed, ~a failed ---~n"
         pass-count fail-count)
