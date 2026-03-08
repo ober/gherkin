@@ -177,15 +177,20 @@ Two fixes applied:
 
 **Why:** True self-hosting means Gerbil's module system handles imports, not our hand-rolled loader. This enables proper namespace management, phase separation, and `for-syntax` imports.
 
-### D.1 Module reading
+### D.1 Module reading ✅
 
-- [ ] `core-read-module` reads a `.ss` file and extracts prelude/namespace/package
-- [ ] `gerbil.pkg` files are parsed for package prefixes
-- [ ] Module paths resolve correctly (`:std/sugar` → file path)
+- [x] `core-read-module` reads a `.ss` file and extracts prelude/namespace/package
+- [x] `gerbil.pkg` files are parsed for package prefixes
+- [x] Module paths resolve correctly (`:std/sort` → absolute path, `:std/error` → correct metadata)
+- [x] Fixed `gerbil.pkg` dot-notation bug — compiler was treating `gerbil.pkg` variable as `(slot-ref gerbil 'pkg)` field access
+- [x] Injected Gambit compat functions: `read-syntax-from-file` (via gherkin reader), `call-with-input-source-file`, `path-directory`, `path-strip-directory`, `gambit-path-expand`, `gambit-path-normalize`, `macro-datum-parsing-exception?`
 
 ### D.2 Module expansion
 
 - [ ] `core-import-module` loads and expands a module through the expander
+  - Requires prelude resolution (recursive module import)
+  - Requires `core-expand-module-begin` to work
+  - Requires module context creation with struct field access
 - [ ] Import/export filtering works (only-in, except-in, rename-in, prefix-in)
 - [ ] `for-syntax` imports load at the correct phase
 - [ ] Module contexts are created with proper namespaces
@@ -319,7 +324,7 @@ Two options:
 | A | Method dispatch works | None | **Critical** | ✅ Done |
 | B | define-syntax evaluates | Phase A | Hard | ✅ Done |
 | C | include directive | None | Easy | ✅ Done |
-| D | Module expansion via expander | Phase A+B | Hard | 🔲 Next |
+| D | Module expansion via expander | Phase A+B | Hard | 🔨 In progress (D.1 done) |
 | E | Compiler retargeting | Phase A+B+D | Medium | 🔲 |
 | F | Bootstrap artifacts | Phase A-E | Easy | 🔲 |
 | G | Full std library | Phase C+D | Medium | 🔲 |
@@ -345,7 +350,7 @@ The following phases established the cross-compilation bootstrap:
 | 6 | Standard library | 14 std modules loaded |
 | 7 | REPL and tooling | Working REPL with gherkin-based compilation |
 
-**Test harness:** `tests/self-host-core.ss` — 102/102 checks pass
+**Test harness:** `tests/self-host-core.ss` — 112/112 checks pass
 
 ---
 

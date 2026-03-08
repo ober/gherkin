@@ -1210,6 +1210,190 @@
   (check "syntax-case macros" (eqv? (eval '(my-let1 x 10 (+ x 1))) 11)))
 
 ;;; ============================================================
+;;; Module Expansion via Expander (Phase D)
+;;; ============================================================
+
+(printf "~n=== Module Expansion (Phase D) ===~n")
+
+;; D.1: Check expander module hooks are bound
+(guard (exn [#t
+  (printf "  hook error: ~a~n" (if (message-condition? exn) (condition-message exn) exn))
+  (check "module hooks bound" #f)])
+  (let ([import-hook (eval 'current-expander-module-import)]
+        [eval-hook (eval 'current-expander-module-eval)])
+    (check "module hooks bound"
+      (and (procedure? import-hook) (procedure? eval-hook)))))
+
+;; D.2: Check core-import-module and core-read-module are procedures
+(guard (exn [#t
+  (printf "  core fns error: ~a~n" (if (message-condition? exn) (condition-message exn) exn))
+  (check "core module fns bound" #f)])
+  (check "core module fns bound"
+    (and (procedure? (eval 'core-import-module))
+         (procedure? (eval 'core-read-module))
+         (procedure? (eval 'core-resolve-module-path)))))
+
+;; D.3: Set up load-path for library module resolution
+(let ([gerbil-src (string-append (getenv "HOME") "/mine/gerbil/src/")])
+  (eval `(set-load-path! (list ,gerbil-src))))
+
+(guard (exn [#t
+  (check "load-path set" #f)])
+  (check "load-path set" (pair? (eval '(load-path)))))
+
+;; D.3b: Check key struct predicates are bound for module expansion
+(guard (exn [#t
+  (check "expander struct types bound" #f)])
+  (check "expander struct types bound"
+    (and (procedure? (eval 'syntax-wrap?))
+         (procedure? (eval 'AST?))
+         (procedure? (eval 'make-syntax-wrap))
+         (procedure? (eval 'syntax-e)))))
+
+;; D.3c: Inject Gambit compat functions needed by module expansion
+(guard (exn [#t (void)])
+  ;; datum-parsing-exception? — Gambit reader error predicate. Not applicable on Chez.
+  (eval '(define macro-datum-parsing-exception? (lambda (e) #f)))
+  (eval '(define datum-parsing-exception-filepos (lambda (e) 0))))
+
+;; D.3c2: Inject read-syntax-from-file using our Gerbil reader
+;; The compiled version from runtime/syntax.ss uses ##read-all-as-a-begin-expr-from-path
+;; which is a Gambit primitive. Replace with Chez-compatible implementation that
+;; uses our Gerbil reader and wraps results in AST objects.
+(guard (exn [#t
+  (printf "  WARNING: failed to inject read-syntax-from-file: ~a~n"
+    (if (message-condition? exn) (condition-message exn) exn))])
+  ;; Use our Gerbil reader (handles ## syntax, @list, etc.)
+  ;; Inject directly using define-top-level-value to avoid quasiquote issues
+  (define-top-level-value 'read-syntax-from-file
+    (lambda (path)
+      (let ([forms (gerbil-read-file path)])
+        ;; Return forms as-is — they're already annotated-datum objects
+        ;; which are compatible with AST (both are gerbil-struct with e and source fields)
+        forms))
+    (interaction-environment))
+  ;; Also inject call-with-input-source-file (same as call-with-input-file for Chez)
+  (define-top-level-value 'call-with-input-source-file
+    call-with-input-file
+    (interaction-environment)))
+
+;; D.3d2: Inject path utility functions needed by module system
+(guard (exn [#t (void)])
+  (eval '(define (path-directory path)
+    (let ([len (string-length path)])
+      (let lp ([i (- len 1)])
+        (cond
+          [(< i 0) "."]
+          [(char=? (string-ref path i) #\/)
+           (if (= i 0) "/" (substring path 0 (+ i 1)))]
+          [else (lp (- i 1))]))))))
+
+(guard (exn [#t (void)])
+  (eval '(define (path-strip-directory path)
+    (let ([len (string-length path)])
+      (let lp ([i (- len 1)])
+        (cond
+          [(< i 0) path]
+          [(char=? (string-ref path i) #\/)
+           (substring path (+ i 1) len)]
+          [else (lp (- i 1))]))))))
+
+;; D.3e: Inject gambit-path-expand/normalize into eval env
+(guard (exn [#t (void)])
+  (eval '(define gambit-path-expand
+    (lambda (path . rest)
+      (if (null? rest)
+        (if (and (> (string-length path) 0)
+                 (char=? (string-ref path 0) #\~))
+          (string-append (getenv "HOME") (substring path 1 (string-length path)))
+          path)
+        (let ([base (car rest)])
+          (if (and (> (string-length path) 0)
+                   (char=? (string-ref path 0) #\/))
+            path
+            (string-append base "/" path))))))))
+(guard (exn [#t (void)])
+  (eval '(define gambit-path-normalize (lambda (path) path))))
+
+;; D.4: Check core-resolve-library-module-path works
+(guard (exn [#t
+  (printf "  resolve error: ~a~n" (if (message-condition? exn) (condition-message exn) exn))
+  (when (irritants-condition? exn)
+    (printf "    irritants: ~a~n" (condition-irritants exn)))
+  (check "library path resolution" #f)])
+  ;; First test stx-e on a plain symbol
+  (let ([v (eval '(stx-e ':std/sort))])
+    (printf "  stx-e ':std/sort => ~a~n" v))
+  (let ([path (eval '(core-resolve-library-module-path ':std/sort))])
+    (printf "  :std/sort => ~a~n" path)
+    (check "library path resolution" (and (string? path) (> (string-length path) 0)))))
+
+;; D.5: Check core-library-module-path? recognizes module paths
+(guard (exn [#t
+  (printf "  path check error: ~a~n" (if (message-condition? exn) (condition-message exn) exn))
+  (check "module path recognition" #f)])
+  (check "module path recognition"
+    (and (eval '(core-library-module-path? ':std/sort))
+         (eval '(core-library-module-path? ':std/error))
+         (not (eval '(core-library-module-path? 'foo))))))
+
+;; D.6: Try core-read-module/sexp on a simple file
+;; First test read-syntax-from-file
+(guard (exn [#t
+  (printf "  read-syntax error: ~a~n" (if (message-condition? exn) (condition-message exn) exn))
+  (check "read-syntax-from-file works" #f)])
+  (let* ([sort-path (eval '(core-resolve-library-module-path ':std/sort))]
+         [forms (eval `(read-syntax-from-file ,sort-path))])
+    (printf "  read-syntax-from-file: ~a forms~n" (length forms))
+    (check "read-syntax-from-file works" (> (length forms) 0))))
+
+;; Now try core-read-module
+(guard (exn [#t
+  (printf "  read-module error: ~a~n" (if (message-condition? exn) (condition-message exn) exn))
+  (when (irritants-condition? exn)
+    (printf "    irritants: ~a~n" (condition-irritants exn)))
+  (check "core-read-module works" #f)])
+  (let ([sort-path (eval '(core-resolve-library-module-path ':std/sort))])
+    (call-with-values
+      (lambda () (eval `(core-read-module ,sort-path)))
+      (lambda results
+        (printf "  core-read-module returned ~a values~n" (length results))
+        (check "core-read-module works" (= (length results) 4))))))
+
+;; D.7: Test reading std/error module metadata
+;; First check that core-read-module works for a file without package dependencies
+(guard (exn [#t
+  (printf "  metadata error: ~a~n" (if (message-condition? exn) (condition-message exn) exn))
+  (when (irritants-condition? exn)
+    (printf "    irritants: ~a~n" (condition-irritants exn)))
+  (check "module metadata extraction" #f)])
+  ;; core-read-module calls core-read-module-package which reads gerbil.pkg
+  ;; This needs call-with-input-source-file and the package cache
+  ;; First test with sort (which has a gerbil.pkg in std/)
+  (let ([sort-path (eval '(core-resolve-library-module-path ':std/sort))])
+    (call-with-values
+      (lambda () (eval `(core-read-module ,sort-path)))
+      (lambda (prelude mod-id mod-ns body)
+        (printf "  :std/sort prelude=~a id=~a ns=~a body-len=~a~n"
+          prelude mod-id mod-ns (length body))
+        (check "module metadata extraction"
+          (and (symbol? mod-id) (list? body) (> (length body) 0)))))))
+
+;; Also test :std/error
+(guard (exn [#t
+  (printf "  error-module metadata error: ~a~n" (if (message-condition? exn) (condition-message exn) exn))
+  (when (irritants-condition? exn)
+    (printf "    irritants: ~a~n" (condition-irritants exn)))
+  (check "error module metadata" #f)])
+  (let ([error-path (eval '(core-resolve-library-module-path ':std/error))])
+    (call-with-values
+      (lambda () (eval `(core-read-module ,error-path)))
+      (lambda (prelude mod-id mod-ns body)
+        (printf "  :std/error prelude=~a id=~a ns=~a body-len=~a~n"
+          prelude mod-id mod-ns (length body))
+        (check "error module metadata" (symbol? mod-id))))))
+
+;;; ============================================================
 ;;; Summary
 ;;; ============================================================
 

@@ -2705,7 +2705,14 @@
                 (let lp ((i 1))
                   (cond
                     ((>= i (- (string-length s) 1)) #f)
-                    ((char=? (string-ref s i) #\.) #t)
+                    ((char=? (string-ref s i) #\.)
+                     ;; Found a dot — check that the right side isn't a file extension.
+                     ;; Symbols like gerbil.pkg, module.ss are variable names, not field access.
+                     (let ((right (substring s (+ i 1) (string-length s))))
+                       (not (member right
+                              '("pkg" "ss" "sls" "scm" "sld" "md" "txt" "json" "xml"
+                                "yml" "yaml" "toml" "cfg" "ini" "log" "csv" "html"
+                                "c" "h" "o" "a" "so" "ssi")))))
                     (else (lp (+ i 1)))))))))
 
   (define (split-dot-notation sym)
