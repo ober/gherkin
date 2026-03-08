@@ -580,6 +580,8 @@
           ;; Consider it loaded even with eval errors
           ;; (many are expected define-syntax failures)
           (hashtable-set! *module-registry* mod-id #t)
+          ;; Force GC after compilation to keep memory under control
+          (collect)
           (values (length compiled) error-count)))))))
 
   (define (string-replace str old new)
