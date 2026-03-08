@@ -21,15 +21,22 @@
             1+ 1- fx/ fx1+ fx1-
             error error? raise with-exception-handler identifier?
             hash-table? make-hash-table compile-file)
-    (except (compat gambit-compat) void? absent-obj)
+    (except (compat gambit-compat) void? absent-obj with-exception-catcher)
     (compat types)
     (runtime util)
     (except (runtime table) string-hash)
     (runtime hash)
     (runtime mop)
-    (only (runtime error) Error::t error-message error-irritants error-trace
-          error? raise display-exception)
+    (only (runtime error) Error::t ContractViolation::t
+          error-message error-irritants error-trace
+          error? contract-violation-error?
+          raise raise-contract-violation-error
+          display-exception with-catch with-exception-catcher
+          exception? error-object?
+          Error? Error-message Error-irritants
+          dump-stack-trace? exception-message)
     (runtime syntax)
+    (only (runtime control) make-promise make-atomic-promise with-unwind-protect)
     (only (compiler compile) gerbil-compile-top gerbil-compile-expression
           strip-annotations sanitize-compiled *current-source-dir*)
     (only (reader reader) gerbil-read-file annotated-datum? annotated-datum-value))
@@ -122,10 +129,22 @@
         (|##string->keyword| . ,|##string->keyword|)
         ;; Error types (from runtime/error)
         (Error::t . ,Error::t)
+        (ContractViolation::t . ,ContractViolation::t)
         (error-message . ,error-message)
         (error-irritants . ,error-irritants)
         (error-trace . ,error-trace)
         (error? . ,error?)
+        (exception? . ,exception?)
+        (error-object? . ,error-object?)
+        (contract-violation-error? . ,contract-violation-error?)
+        (raise-contract-violation-error . ,raise-contract-violation-error)
+        (with-catch . ,with-catch)
+        (with-exception-catcher . ,with-exception-catcher)
+        (Error? . ,Error?)
+        (Error-message . ,Error-message)
+        (Error-irritants . ,Error-irritants)
+        (dump-stack-trace? . ,dump-stack-trace?)
+        (exception-message . ,exception-message)
         ;; Hash (from runtime/hash)
         (make-hash-table . ,make-hash-table)
         (make-hash-table-eq . ,make-hash-table-eq)
@@ -169,6 +188,10 @@
         (string-split . ,string-split)
         (string-join . ,string-join)
         (display* . ,display*)
+        ;; Control (from runtime/control)
+        (make-promise . ,make-promise)
+        (make-atomic-promise . ,make-atomic-promise)
+        (with-unwind-protect . ,with-unwind-protect)
         ;; Syntax objects (used in macros)
         (stx-e . ,stx-e)
         (stx-wrap-source . ,stx-wrap-source)
