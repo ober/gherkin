@@ -2752,8 +2752,10 @@
     ":std/srfi/121" ":std/srfi/127" ":std/srfi/128"
     ":std/srfi/130" ":std/srfi/132" ":std/srfi/133"
     ":std/srfi/134" ":std/srfi/135"
-    ":std/srfi/141" ":std/srfi/143" ":std/srfi/145"
-    ":std/srfi/151" ":std/srfi/78" ":std/srfi/113"
+    ":std/srfi/141" ":std/srfi/143" ":std/srfi/144"
+    ":std/srfi/145" ":std/srfi/151" ":std/srfi/158"
+    ":std/srfi/159" ":std/srfi/212"
+    ":std/srfi/78" ":std/srfi/113"
     ;; text
     ":std/text/hex" ":std/text/utf8" ":std/text/csv" ":std/text/base64"
     ":std/text/json"
@@ -2780,9 +2782,20 @@
     ":std/build-config" ":std/build-features" ":std/build-script"
     ":std/build-spec" ":std/build" ":std/build-std" ":std/ssi"
     ;; cli
-    ":std/cli/multicall"
+    ":std/cli/multicall" ":std/cli/print-exit" ":std/cli/shell"
     ;; more misc
-    ":std/misc/rwlock"))
+    ":std/misc/rwlock"
+    ;; event, interface, debug
+    ":std/getopt" ":std/event" ":std/interface"
+    ":std/generic/dispatch" ":std/generic/macros"
+    ":std/debug/DBG"
+    ;; markup
+    ":std/markup/sxml" ":std/markup/html" ":std/markup/xml" ":std/markup/tal"
+    ;; mime
+    ":std/mime/types" ":std/mime/struct"
+    ;; parser
+    ":std/parser/base" ":std/parser/lexer"
+    ":std/parser/deflexer" ":std/parser/defparser" ":std/parser/grammar"))
 
 (for-each (lambda (mod)
   (check (string-append "load " mod)
