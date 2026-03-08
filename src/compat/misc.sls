@@ -13,9 +13,15 @@
     string-suffix?
     string-contains
     string-trim-eol
+    string-split
+    string-join
+    string-trim
+    string-trim-right
 
     ;; :std/misc/list
     flatten
+    unique
+    pgetq
     plist->alist
     alist->plist
     length=?
@@ -55,7 +61,15 @@
     first second third fourth fifth
     last
     last-pair
-    count)
+    count
+
+    ;; :std/misc/hash
+    hash-ref/default
+    hash-copy/alist
+
+    ;; I/O utilities
+    call-with-output-string
+    read-line)
 
   (import
     (except (chezscheme) iota last-pair filter remove partition
@@ -95,6 +109,43 @@
          (lp (- i 1)))
         (else (substring str 0 (+ i 1))))))
 
+  (define (string-split str sep)
+    (let ((slen (string-length str))
+          (seplen (string-length sep)))
+      (if (= seplen 0) (list str)
+        (let loop ((i 0) (start 0) (result '()))
+          (cond
+            ((> (+ i seplen) slen)
+             (reverse (cons (substring str start slen) result)))
+            ((string=? (substring str i (+ i seplen)) sep)
+             (loop (+ i seplen) (+ i seplen)
+                   (cons (substring str start i) result)))
+            (else (loop (+ i 1) start result)))))))
+
+  (define (string-join lst sep)
+    (if (null? lst) ""
+      (let ((p (open-output-string)))
+        (display (car lst) p)
+        (for-each (lambda (s) (display sep p) (display s p)) (cdr lst))
+        (get-output-string p))))
+
+  (define (string-trim str)
+    (let* ((len (string-length str))
+           (start (let loop ((i 0))
+                    (if (and (< i len) (char-whitespace? (string-ref str i)))
+                      (loop (+ i 1)) i)))
+           (end (let loop ((i (- len 1)))
+                  (if (and (>= i start) (char-whitespace? (string-ref str i)))
+                    (loop (- i 1)) (+ i 1)))))
+      (substring str start end)))
+
+  (define (string-trim-right str)
+    (let* ((len (string-length str))
+           (end (let loop ((i (- len 1)))
+                  (if (and (>= i 0) (char-whitespace? (string-ref str i)))
+                    (loop (- i 1)) (+ i 1)))))
+      (substring str 0 end)))
+
   ;; --- :std/misc/list ---
 
   (define (flatten lst)
@@ -103,6 +154,20 @@
       ((pair? (car lst))
        (append (flatten (car lst)) (flatten (cdr lst))))
       (else (cons (car lst) (flatten (cdr lst))))))
+
+  (define (unique lst)
+    (let loop ((l lst) (seen '()) (result '()))
+      (cond
+        ((null? l) (reverse result))
+        ((member (car l) seen) (loop (cdr l) seen result))
+        (else (loop (cdr l) (cons (car l) seen) (cons (car l) result))))))
+
+  (define (pgetq key plist)
+    (cond
+      ((null? plist) #f)
+      ((null? (cdr plist)) #f)
+      ((eq? key (car plist)) (cadr plist))
+      (else (pgetq key (cddr plist)))))
 
   (define (plist->alist plist)
     (let lp ((plist plist) (result '()))
@@ -292,5 +357,30 @@
     (let lp ((lst lst) (n 0))
       (if (null? lst) n
         (lp (cdr lst) (if (pred (car lst)) (+ n 1) n)))))
+
+  ;; --- :std/misc/hash ---
+
+  (define (hash-ref/default ht key default)
+    (if (hashtable-contains? ht key)
+      (hashtable-ref ht key #f)
+      default))
+
+  (define (hash-copy/alist ht)
+    (let-values (((keys vals) (hashtable-entries ht)))
+      (let loop ((i 0) (result '()))
+        (if (>= i (vector-length keys))
+          result
+          (loop (+ i 1) (cons (cons (vector-ref keys i) (vector-ref vals i)) result))))))
+
+  ;; --- I/O utilities ---
+
+  (define (call-with-output-string proc)
+    (let ((p (open-output-string)))
+      (proc p)
+      (get-output-string p)))
+
+  (define (read-line . args)
+    (let ((port (if (pair? args) (car args) (current-input-port))))
+      (get-line port)))
 
   ) ;; end library

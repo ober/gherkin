@@ -1,43 +1,55 @@
 #!chezscheme
-;;; fdio.sls -- Compat shim for Gerbil's :std/os/fdio
-;;; File descriptor I/O operations.
+;;; fdio.sls -- Gerbil :std/os/fdio compat
+;;; File descriptor I/O operations via POSIX read(2)/write(2).
 
 (library (compat fdio)
-  (export
-    fdopen-input-port
-    fdopen-output-port
-    fdclose
-    fdread
-    fdwrite)
+  (export fdread fdwrite write-subu8vector
+          fdopen-input-port fdopen-output-port fdclose)
 
   (import (chezscheme))
 
-  ;; Chez doesn't expose raw fd operations directly.
-  ;; Provide basic implementations using Chez port operations.
+  ;; fdread: read count bytes from fd, returns bytevector
+  (define (fdread fd count)
+    (let* ((buf (make-bytevector count))
+           (n ((foreign-procedure "read" (int u8* unsigned-int) int) fd buf count)))
+      (if (> n 0)
+        (if (= n count) buf
+          (let ((result (make-bytevector n)))
+            (bytevector-copy! buf 0 result 0 n)
+            result))
+        (make-bytevector 0))))
 
+  ;; fdwrite: write bytevector to fd, returns bytes written
+  (define (fdwrite fd bv)
+    ((foreign-procedure "write" (int u8* unsigned-int) int) fd bv (bytevector-length bv)))
+
+  ;; write-subu8vector: write a slice of a bytevector to a port
+  (define (write-subu8vector bv start end . port-opt)
+    (let ((port (if (pair? port-opt) (car port-opt) (current-output-port))))
+      (if (binary-port? port)
+        (put-bytevector port bv start (- end start))
+        ;; Textual port: convert bytevector slice to string
+        (let ((sub (if (and (= start 0) (= end (bytevector-length bv)))
+                     bv
+                     (let ((r (make-bytevector (- end start))))
+                       (bytevector-copy! bv start r 0 (- end start))
+                       r))))
+          (display (utf8->string sub) port)))))
+
+  ;; fdopen-input-port: open input port from file descriptor
   (define (fdopen-input-port fd . rest)
-    ;; Open an input port from a file descriptor
-    ;; Chez can do this via open-fd-input-port
     (open-fd-input-port fd
       (buffer-mode block)
       (if (pair? rest) (car rest) (native-transcoder))))
 
+  ;; fdopen-output-port: open output port from file descriptor
   (define (fdopen-output-port fd . rest)
     (open-fd-output-port fd
       (buffer-mode block)
       (if (pair? rest) (car rest) (native-transcoder))))
 
-  (define (fdclose fd)
-    ;; Close a file descriptor — no direct Chez equivalent without FFI
-    ;; Rely on port close instead
-    (void))
-
-  (define (fdread fd buf count)
-    ;; Read from fd into bytevector — stub
-    0)
-
-  (define (fdwrite fd buf count)
-    ;; Write to fd from bytevector — stub
-    0)
+  ;; fdclose: close a raw file descriptor
+  (define fdclose
+    (foreign-procedure "close" (int) int))
 
   ) ;; end library
