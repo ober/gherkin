@@ -341,7 +341,13 @@
              (unless (and (char? ch3) (char=? ch3 #\())
                (error 'gerbil-read "expected #u8("))
              (let ((items (read-list rs #\))))
-               (annotate rs (apply u8vector items) loc)))))
+               ;; Strip annotations from items — u8vector needs raw numbers
+               (let ((raw-items (map (lambda (x)
+                                       (if (annotated-datum? x)
+                                         (annotated-datum-value x)
+                                         x))
+                                     items)))
+                 (annotate rs (apply u8vector raw-items) loc))))))
 
         ;; #\ character
         ((char=? ch #\\)
