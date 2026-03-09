@@ -2540,6 +2540,68 @@
                      (list (hash-ref h 'a) (hash-ref h 'b) (hash-length h))))
             '(1 2 2))))
 
+;; sort with custom comparator
+(guard (exn [#t
+  (printf "  G.2 sort-custom error: ~a~n" (if (message-condition? exn) (condition-message exn) exn))
+  (check "sort with custom comparator" #f)])
+  (check "sort with custom comparator"
+    (equal? (eval '(sort '("banana" "apple" "cherry") string<?)) '("apple" "banana" "cherry"))))
+
+;; Module loader functionality tests
+(printf "~n--- G.2b: Module loader functionality ---~n")
+
+;; srfi/1 — list operations
+(guard (exn [#t
+  (printf "  G.2b srfi/1 error: ~a~n" (if (message-condition? exn) (condition-message exn) exn))
+  (check "srfi/1 iota works" #f)])
+  (eval '(gerbil-load-module ':std/srfi/1))
+  (check "srfi/1 iota works"
+    (equal? (eval '(iota 5)) '(0 1 2 3 4))))
+
+;; srfi/13 — string operations
+(guard (exn [#t
+  (printf "  G.2b srfi/13 error: ~a~n" (if (message-condition? exn) (condition-message exn) exn))
+  (check "srfi/13 string-upcase works" #f)])
+  (eval '(gerbil-load-module ':std/srfi/13))
+  (check "srfi/13 string-upcase works"
+    (equal? (eval '(string-upcase "hello")) "HELLO")))
+
+;; json — test via module loader
+(guard (exn [#t
+  (printf "  G.2b json error: ~a~n" (if (message-condition? exn) (condition-message exn) exn))
+  (when (irritants-condition? exn)
+    (printf "  G.2b json irritants: ~a~n" (condition-irritants exn)))
+  (check "json read works" #f)])
+  (eval '(gerbil-load-module ':std/text/json))
+  (let ([result (eval '(string->json-object "{\"name\":\"gherkin\",\"version\":1}"))])
+    (check "json read works"
+      (and (hash-table? result)
+           (equal? (hash-ref result "name") "gherkin")
+           (eqv? (hash-ref result "version") 1)))))
+
+;; text/hex — hex encode/decode
+(guard (exn [#t
+  (printf "  G.2b hex error: ~a~n" (if (message-condition? exn) (condition-message exn) exn))
+  (when (irritants-condition? exn)
+    (printf "  G.2b hex irritants: ~a~n" (condition-irritants exn)))
+  (when (who-condition? exn)
+    (printf "  G.2b hex who: ~a~n" (condition-who exn)))
+  (check "hex encode works" #f)])
+  (eval '(gerbil-load-module ':std/text/hex))
+  ;; Restore native string->utf8 (clobbered by Gerbil runtime)
+  (define-top-level-value 'string->utf8 string->utf8 (interaction-environment))
+  (let ([encoded (eval '(hex-encode (string->utf8 "hello")))])
+    (check "hex encode works"
+      (equal? encoded "68656c6c6f"))))
+
+;; text/base64
+(guard (exn [#t
+  (printf "  G.2b base64 error: ~a~n" (if (message-condition? exn) (condition-message exn) exn))
+  (check "base64 encode works" #f)])
+  (eval '(gerbil-load-module ':std/text/base64))
+  (let ([encoded (eval '(base64-encode (string->utf8 "hello")))])
+    (check "base64 encode works" (string? encoded))))
+
 ;; G.3: Import misc modules
 (printf "~n--- G.3: Misc modules ---~n")
 
