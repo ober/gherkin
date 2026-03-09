@@ -3119,6 +3119,51 @@
     :std/web/cgi
     :std/db/sqlite :std/db/postgresql))
 
+;; Batch 8: io/strio/socket extended + net/httpd/smtp/ssl/websocket (55)
+(run-module-batch "std-io-net-ext"
+  '(:std/io/api :std/io/bio/chunked :std/io/bio/delimited :std/io/bio/inline
+    :std/io/bio/util :std/io/delimited :std/io/dummy :std/io/file
+    :std/io/interface :std/io/port
+    :std/io/socket/basic :std/io/socket/datagram
+    :std/io/socket/server :std/io/socket/socket :std/io/socket/stream
+    :std/io/strio/chunked :std/io/strio/delimited :std/io/strio/inline
+    :std/io/strio/input :std/io/strio/output :std/io/strio/packed
+    :std/io/strio/reader :std/io/strio/util :std/io/strio/writer
+    :std/io/util
+    :std/net/address :std/net/bio :std/net/bio/buffer :std/net/bio/file
+    :std/net/httpd :std/net/httpd/api :std/net/httpd/control :std/net/httpd/server
+    :std/net/json-rpc :std/net/request
+    :std/net/s3 :std/net/s3/interface
+    :std/net/smtp :std/net/smtp/client :std/net/smtp/connection
+    :std/net/smtp/data :std/net/smtp/headers :std/net/smtp/interface :std/net/smtp/session
+    :std/net/socket :std/net/socket/base :std/net/socket/basic-server
+    :std/net/socket/basic-socket :std/net/socket/buffer
+    :std/net/socket/epoll-server :std/net/socket/kqueue-server :std/net/socket/server
+    :std/net/socks :std/net/socks/api :std/net/socks/interface :std/net/socks/server
+    :std/net/uri))
+
+;; Batch 9: ssl/websocket + crypto/db/srfi/protobuf/actor extended (51)
+(run-module-batch "std-remaining"
+  '(:std/net/ssl :std/net/ssl/api :std/net/ssl/client :std/net/ssl/error
+    :std/net/ssl/interface :std/net/ssl/libssl :std/net/ssl/server :std/net/ssl/socket
+    :std/net/websocket :std/net/websocket/client :std/net/websocket/interface
+    :std/net/websocket/server :std/net/websocket/socket
+    :std/os/hostname :std/os/pid :std/os/signal-handler :std/os/signalfd
+    :std/crypto :std/crypto/kdf
+    :std/protobuf/macros :std/protobuf/proto
+    ;; :std/db/postgresql-driver — fails in batch (dep issue)
+    :std/srfi/146/hamt :std/srfi/146/hamt-map :std/srfi/146/hamt-misc
+    :std/srfi/146/hash :std/srfi/146/vector-edit
+    :std/text/zlib :std/text/json/json-benchmark
+    :std/web/rack
+    :std/actor :std/actor-v13 :std/actor-v13/rpc :std/actor-v13/rpc/connection
+    :std/actor-v13/rpc/proto/cipher :std/actor-v13/rpc/proto/cookie
+    :std/actor-v13/rpc/proto/message :std/actor-v13/rpc/proto/null
+    :std/actor-v13/rpc/server
+    :std/actor-v18/loader-test-server :std/actor-v18/loader-test-support
+    :std/actor-v18/test-util
+    :std/foreign-test-support :std/io/file-benchmark))
+
 ;;; ============================================================
 ;;; Summary
 ;;; ============================================================
