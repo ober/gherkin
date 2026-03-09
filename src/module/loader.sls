@@ -342,6 +342,8 @@
         (|##complex?| . ,complex?)
         (|##procedure?| . ,procedure?)
         (|##vector?| . ,vector?)
+        ;; Gambit hash table variants
+        (make-hash-table-immediate . ,make-hash-table-eq)
         ;; Gambit u8vector → Chez bytevector aliases
         (u8vector-length . ,bytevector-length)
         (u8vector-ref . ,bytevector-u8-ref)
