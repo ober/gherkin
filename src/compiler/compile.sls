@@ -425,6 +425,44 @@
            ;; include
            ((eq? head 'include)
             (compile-include form))
+           ;; define-syntax — pass through or translate
+           ;; Handles syntax-rules (native), identifier-rules (translate to
+           ;; make-variable-transformer for Chez compatibility)
+           ((eq? head 'define-syntax)
+            (let ((name (cadr form))
+                  (transformer (caddr form)))
+              (if (and (pair? transformer)
+                       (eq? (car transformer) 'identifier-rules))
+                ;; identifier-rules wraps a parameter for get/set
+                ;; Define as a regular mutable variable initialized from the parameter
+                ;; This allows both read and set! to work without syntax transformers
+                (let* ((clauses (cddr transformer))
+                       (getter-clause
+                         (find (lambda (c) (not (and (pair? (car c)) (eq? (caar c) 'set!))))
+                               clauses)))
+                  (if getter-clause
+                    (let ([get-body (if (and (pair? (cdr getter-clause))
+                                            (pair? (cddr getter-clause)))
+                                     (caddr getter-clause)
+                                     (cadr getter-clause))])
+                      `(define ,name ,get-body))
+                    '(begin)))
+                ;; Check for Gambit ## unsafe-optimization macros and skip them
+                ;; These map standard functions to Gambit unsafe versions; no-op on Chez
+                (letrec ((has-gambit-prim?
+                           (lambda (form)
+                             (cond
+                               ((symbol? form)
+                                (let ((s (symbol->string form)))
+                                  (and (> (string-length s) 2)
+                                       (string=? (substring s 0 2) "##"))))
+                               ((pair? form)
+                                (or (has-gambit-prim? (car form))
+                                    (has-gambit-prim? (cdr form))))
+                               (else #f)))))
+                  (if (has-gambit-prim? transformer)
+                    '(begin)  ;; skip Gambit unsafe-op macros
+                    form)))))
            ;; declare / declare-inline
            ((memq head '(declare declare-inline))
             '(begin)) ;; ignore declarations
@@ -3045,7 +3083,12 @@
           (guard (exn
                    [#t `(begin)]) ;; silently skip if file not found
             (let ((forms (read-all-forms resolved)))
-              `(begin ,@(map gerbil-compile-top forms)))))
+              ;; Compile each form individually — skip failures
+              `(begin ,@(filter-map
+                          (lambda (f)
+                            (guard (exn [#t #f])
+                              (gerbil-compile-top f)))
+                          forms)))))
         `(begin))))
 
   ;; --- defvalues compilation ---

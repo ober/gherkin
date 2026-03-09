@@ -60,6 +60,15 @@
   ;; Module caching: skip recompilation if cache is newer than source
   (define *enable-cache* #t)
 
+  ;; compose — standard function composition (needed for injecting into modules)
+  (define (gherkin-compose . fns)
+    (if (null? fns) values
+      (let ([f (car fns)] [rest (cdr fns)])
+        (if (null? rest) f
+          (let ([g (apply gherkin-compose rest)])
+            (lambda args
+              (call-with-values (lambda () (apply g args)) f)))))))
+
   ;; ============================================================
   ;; Initialization
   ;; ============================================================
@@ -127,7 +136,13 @@
         (|##keyword?| . ,|##keyword?|)
         (|##keyword->string| . ,|##keyword->string|)
         (|##string->keyword| . ,|##string->keyword|)
-        ;; Error types (from runtime/error)
+        ;; Error types and methods (from runtime/error)
+        ;; Error:::init! — Gerbil method for initializing Error instances
+        (Error:::init! . ,(lambda (self message . rest)
+                            (let ([message (if (string? message) message
+                                             (call-with-string-output-port
+                                               (lambda (p) (display message p))))])
+                              (class-instance-init! self 'message: message))))
         (Error::t . ,Error::t)
         (ContractViolation::t . ,ContractViolation::t)
         (error-message . ,error-message)
@@ -207,8 +222,14 @@
         (stx-foldr . ,stx-foldr)
         (stx-identifier . ,stx-identifier)
         (identifier? . ,identifier?)
+        (identifier-list? . ,(lambda (stx)
+                               (and (list? stx) (for-all identifier? stx))))
         (genident . ,genident)
         (gentemps . ,gentemps)
+        ;; Gerbil expander functions needed by compiled syntax
+        (syntax-local-introduce . ,(lambda (stx) stx))  ;; identity in Chez
+        ;; Functional utilities
+        (compose . ,gherkin-compose)
         ;; Gambit ## unsafe primitives → Chez safe equivalents
         ;; These are used by compiled modules that reference ##foo directly
         (|##fx*| . ,fx*)

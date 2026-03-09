@@ -181,6 +181,10 @@
   (define-top-level-value name val (interaction-environment)))
 (define inject-fn inject)
 
+;; Save Chez's native syntax before expander clobbers them
+(define saved-set!-syntax (top-level-syntax 'set! (interaction-environment)))
+(define saved-parameterize-syntax (top-level-syntax 'parameterize (interaction-environment)))
+
 ;; Gambit void and absent markers
 (inject-fn '%%void |%%void|)
 (inject-fn '|%%void| |%%void|)
@@ -2066,11 +2070,32 @@
                              (loop (cdr forms) result)]
                             [else
                              (loop (cdr forms) (cons c result))])))))))])
-        ;; Eval compiled forms
-        (for-each (lambda (c)
-                    (guard (exn [#t (void)])
-                      (eval c)))
-                  compiled)
+        ;; Eval compiled forms (flatten begin blocks so individual errors don't kill group)
+        (define (flatten-begins forms)
+          (let loop ([fs forms] [result '()])
+            (if (null? fs) (reverse result)
+              (let ([c (car fs)])
+                (if (and (pair? c) (eq? (car c) 'begin) (pair? (cdr c)))
+                  (loop (cdr fs) (append (reverse (flatten-begins (cdr c))) result))
+                  (loop (cdr fs) (cons c result)))))))
+        (let ([flat (flatten-begins compiled)])
+          (printf "  [ci forms: ~a compiled, ~a flat]~n" (length compiled) (length flat))
+          (let ([ok 0] [err 0])
+            (for-each (lambda (c)
+                        (guard (exn [#t
+                          (set! err (+ err 1))
+                          (when (and (pair? c) (pair? (cdr c)))
+                            (printf "  [ci FAIL: ~a ~a -- ~a ~a]~n"
+                              (car c)
+                              (if (eq? (car c) 'define)
+                                (if (pair? (cadr c)) (caadr c) (cadr c))
+                                (if (eq? (car c) 'define-syntax) (cadr c) "?"))
+                              (if (message-condition? exn) (condition-message exn) exn)
+                              (if (irritants-condition? exn) (condition-irritants exn) "")))])
+                          (eval c)
+                          (set! ok (+ ok 1))))
+                      flat)
+            (printf "  [ci eval: ~a ok, ~a err]~n" ok err)))
         ;; Register in cache and return root-ctx
         (hash-put! registry path root-ctx)
         root-ctx)))
@@ -2417,6 +2442,10 @@
     (eval `(core-import-module ',mod-sym))
     (check description #t)))
 
+;; Restore Chez's native syntax (Gerbil expander clobbers these)
+(define-top-level-syntax 'set! saved-set!-syntax (interaction-environment))
+(define-top-level-syntax 'parameterize saved-parameterize-syntax (interaction-environment))
+
 (printf "~n--- G.1: Pure Scheme modules ---~n")
 (test-gherkin-import ':std/error "import :std/error")
 (test-gherkin-import ':std/values "import :std/values")
@@ -2425,13 +2454,13 @@
 ;; G.2: Verify imported modules work
 (printf "~n--- G.2: Module functionality ---~n")
 
-;; pregexp — module imports but include'd pregexp.scm references Gerbil error classes
-;; so the define'd functions aren't bound (expected limitation of include-via-gherkin)
+;; pregexp — include directive compiles pregexp.scm inline
 (guard (exn [#t
-  (printf "  G.2 pregexp: expected limitation — ~a~n"
-    (if (message-condition? exn) (condition-message exn) exn))])
-  (let ([result (eval '(pregexp-match "^[a-z]+$" "hello"))])
-    (printf "  G.2: pregexp-match result = ~a~n" result)))
+  (printf "  G.2 pregexp error: ~a~n"
+    (if (message-condition? exn) (condition-message exn) exn))
+  (check "pregexp-match works" #f)])
+  (let ([result (eval '(pregexp-match "([0-9]+)" "abc123def"))])
+    (check "pregexp-match works" (equal? result '("123" "123")))))
 
 ;; values — first-value returns the first value from a multi-value expression
 (guard (exn [#t
