@@ -2574,10 +2574,16 @@
 
 ;; text/hex — encode/decode (uses existing hex module from earlier load)
 (guard (exn [#t
-  (printf "  G.2b hex error: ~a~n" (if (message-condition? exn) (condition-message exn) exn))
+  (printf "  G.2b hex encode error: ~a~n" (if (message-condition? exn) (condition-message exn) exn))
   (check "hex encode (loader)" #f)])
   (let ([encoded (eval '(hex-encode (string->utf8 "hello")))])
     (check "hex encode (loader)" (equal? encoded "68656c6c6f"))))
+
+(guard (exn [#t
+  (printf "  G.2b hex decode error: ~a~n" (if (message-condition? exn) (condition-message exn) exn))
+  (check "hex decode (loader)" #f)])
+  (let ([decoded (eval '(hex-decode "68656c6c6f"))])
+    (check "hex decode (loader)" (equal? (utf8->string decoded) "hello"))))
 
 ;; G.3: Import misc modules
 (printf "~n--- G.3: Misc modules ---~n")

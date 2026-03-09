@@ -469,6 +469,9 @@
            ;; begin-syntax — compile-time definitions, treat as begin
            ((eq? head 'begin-syntax)
             (cons 'begin (map gerbil-compile-top (cdr form))))
+           ;; ~let — Gerbil sugar form (can appear at top level)
+           ((eq? head '~let)
+            (gerbil-compile-expression form))
            ;; begin-foreign — FFI declarations, pass through body
            ((eq? head 'begin-foreign)
             (cons 'begin (map gerbil-compile-top (cdr form))))
@@ -805,6 +808,42 @@
                            `(,(car b) ,(gerbil-compile-expression (cadr b))))
                          (cadr expr))
                     ,@(map gerbil-compile-expression (cddr expr))))
+           ;; ~let — Gerbil sugar for let-values with named-let support
+           ;; (~let let-values name ((var init) ...) body ...) → named let
+           ;; (~let let-values ((var init) ...) body ...) → let
+           ((eq? head '~let)
+            (let ([let-kind (cadr expr)]
+                  [rest (cddr expr)])
+              (cond
+                ;; Named let: (~let let-values name ((binding ...) ...) body ...)
+                [(and (symbol? (car rest))
+                      (not (memq (car rest) '(let-values let*-values))))
+                 (let ([name (car rest)]
+                       [bindings (cadr rest)]
+                       [body (cddr rest)])
+                   ;; For simple bindings ((var init) ...), compile as named let
+                   (let ([simple-bindings
+                           (map (lambda (b)
+                                  (if (and (pair? b) (pair? (car b)) (null? (cdar b)))
+                                    ;; ((var) init) → (var init)
+                                    `(,(caar b) ,(gerbil-compile-expression (cadr b)))
+                                    ;; (var init) → (var init)
+                                    `(,(car b) ,(gerbil-compile-expression (cadr b)))))
+                                bindings)])
+                     `(let ,name ,simple-bindings
+                        ,@(compile-body body))))]
+                ;; Unnamed: (~let let-values ((binding ...) ...) body ...)
+                [else
+                 (let ([bindings (car rest)]
+                       [body (cdr rest)])
+                   (let ([simple-bindings
+                           (map (lambda (b)
+                                  (if (and (pair? b) (pair? (car b)) (null? (cdar b)))
+                                    `(,(caar b) ,(gerbil-compile-expression (cadr b)))
+                                    `(,(car b) ,(gerbil-compile-expression (cadr b)))))
+                                bindings)])
+                     `(let ,simple-bindings
+                        ,@(compile-body body))))])))
            ;; let-hash
            ((eq? head 'let-hash)
             (compile-let-hash expr))

@@ -432,6 +432,43 @@
                                       (let ([p (open-output-string)])
                                         (proc p)
                                         (get-output-string p))))
+        ;; Gambit arithmetic (1+, 1-, fx/, fx1+, fx1-)
+        (|1+| . ,1+)
+        (|1-| . ,1-)
+        (fx/ . ,fx/)
+        (fx1+ . ,fx1+)
+        (fx1- . ,fx1-)
+        ;; Gambit arithmetic-shift → Chez bitwise-arithmetic-shift
+        (arithmetic-shift . ,bitwise-arithmetic-shift)
+        (integer-length . ,integer-length)
+        ;; Gambit I/O
+        (object->string . ,(lambda (obj . args)
+                             (call-with-string-output-port
+                               (lambda (p) (display obj p)))))
+        (pp . ,(lambda (obj . args)
+                  (pretty-print obj (if (pair? args) (car args) (current-output-port)))))
+        (read-line . ,get-line)
+        (with-output-to-string . ,(lambda (thunk)
+                                     (let ([p (open-output-string)])
+                                       (parameterize ([current-output-port p])
+                                         (thunk))
+                                       (get-output-string p))))
+        (with-input-from-string . ,(lambda (s thunk)
+                                      (let ([p (open-input-string s)])
+                                        (parameterize ([current-input-port p])
+                                          (thunk)))))
+        (read-all . ,(lambda args
+                       (let ([port (if (pair? args) (car args) (current-input-port))])
+                         (let loop ([result '()])
+                           (let ([x (read port)])
+                             (if (eof-object? x)
+                                 (reverse result)
+                                 (loop (cons x result))))))))
+        (open-string . ,(lambda (s) (open-input-string s)))
+        ;; Thread stubs (Chez has threads but API differs)
+        (current-thread . ,(lambda () 'main-thread))
+        ;; Fixnum extensions
+        (fxnonnegative? . ,(lambda (x) (and (fixnum? x) (fx>=? x 0))))
         ;; Pregexp (Gerbil uses gambit's pregexp which is loaded via the module)
         ;; These will be overridden when :std/pregexp loads, but we need stubs
         ;; so modules that reference them during compilation don't fail
