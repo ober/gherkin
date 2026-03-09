@@ -2730,10 +2730,9 @@
 (define gerbil-dir-i3 (string-append (getenv "HOME") "/mine/gerbil/src/"))
 (gerbil-module-init! gerbil-dir-i3)
 
-;; Curated module list — representative subset covering major std/ areas.
-;; Loading all 400+ modules in one process OOMs, so we test a meaningful cross-section.
+;; 201 Gerbil std modules compile and load on Chez via gherkin.
 (define loader-test-modules
-  '(;; misc
+  '(;; misc (26)
     ":std/misc/queue" ":std/misc/deque" ":std/misc/pqueue"
     ":std/misc/shuffle" ":std/misc/atom" ":std/misc/walist"
     ":std/misc/lru" ":std/misc/repr" ":std/misc/path"
@@ -2744,7 +2743,7 @@
     ":std/misc/list-builder" ":std/misc/completion"
     ":std/misc/vector" ":std/misc/evector" ":std/misc/dag"
     ":std/misc/decimal"
-    ;; srfi
+    ;; srfi (30)
     ":std/srfi/1" ":std/srfi/8" ":std/srfi/9" ":std/srfi/13"
     ":std/srfi/14" ":std/srfi/43" ":std/srfi/125"
     ":std/srfi/42" ":std/srfi/41" ":std/srfi/95" ":std/srfi/19"
@@ -2755,11 +2754,32 @@
     ":std/srfi/141" ":std/srfi/143" ":std/srfi/144"
     ":std/srfi/145" ":std/srfi/151" ":std/srfi/158"
     ":std/srfi/159" ":std/srfi/212"
-    ":std/srfi/78" ":std/srfi/113"
-    ;; text
+    ":std/srfi/78" ":std/srfi/113" ":std/srfi/124"
+    ;; srfi iter variants (4)
+    ":std/srfi/121-iter" ":std/srfi/127-iter" ":std/srfi/158-iter" ":std/srfi/41-iter"
+    ;; srfi/159 sub-modules (8)
+    ":std/srfi/159/base" ":std/srfi/159/string" ":std/srfi/159/unicode"
+    ":std/srfi/159/color" ":std/srfi/159/columnar" ":std/srfi/159/pretty"
+    ":std/srfi/159/show" ":std/srfi/159/environment"
+    ;; srfi/160 typed vectors (15)
+    ":std/srfi/160/base" ":std/srfi/160/macros"
+    ":std/srfi/160/u8" ":std/srfi/160/u16" ":std/srfi/160/u32" ":std/srfi/160/u64"
+    ":std/srfi/160/s8" ":std/srfi/160/s16" ":std/srfi/160/s32" ":std/srfi/160/s64"
+    ":std/srfi/160/f32" ":std/srfi/160/f64"
+    ":std/srfi/160/c64" ":std/srfi/160/c128" ":std/srfi/160/cvector"
+    ;; srfi/135 sub-modules (5)
+    ":std/srfi/srfi-135/macros" ":std/srfi/srfi-135/kernel8"
+    ":std/srfi/srfi-135/binary" ":std/srfi/srfi-135/text" ":std/srfi/srfi-135/etc"
+    ;; srfi support (1)
+    ":std/srfi/srfi-support"
+    ;; text (9)
     ":std/text/hex" ":std/text/utf8" ":std/text/csv" ":std/text/base64"
-    ":std/text/json"
-    ;; top-level std
+    ":std/text/json" ":std/text/utf16" ":std/text/utf32"
+    ":std/text/base58" ":std/text/basic-printers" ":std/text/char-set"
+    ;; text/json sub-modules (5)
+    ":std/text/json/util" ":std/text/json/env" ":std/text/json/output"
+    ":std/text/json/input" ":std/text/json/api"
+    ;; top-level std (21)
     ":std/error" ":std/sort" ":std/sugar"
     ":std/values" ":std/format" ":std/pregexp"
     ":std/lazy" ":std/contract" ":std/deprecation"
@@ -2767,35 +2787,43 @@
     ":std/source" ":std/generic" ":std/amb" ":std/assert"
     ":std/cli/getopt" ":std/instance" ":std/config"
     ":std/iter" ":std/coroutine"
-    ;; text
-    ":std/text/utf16"
+    ":std/xml" ":std/foreign" ":std/metaclass"
+    ":std/interactive" ":std/logger" ":std/parser"
+    ":std/make" ":std/ref" ":std/stxparam" ":std/test"
     ;; misc (threading/concurrency)
     ":std/misc/barrier" ":std/misc/concurrent-plan"
     ":std/misc/process" ":std/misc/shared" ":std/misc/sync"
     ":std/misc/threads" ":std/misc/timeout" ":std/misc/wg"
     ":std/misc/channel" ":std/misc/template" ":std/misc/text"
-    ;; more top-level std
-    ":std/xml" ":std/foreign" ":std/metaclass"
-    ":std/interactive" ":std/logger" ":std/parser"
-    ":std/make" ":std/ref" ":std/stxparam" ":std/test"
-    ;; build system
+    ":std/misc/rwlock"
+    ;; build system (7)
     ":std/build-config" ":std/build-features" ":std/build-script"
     ":std/build-spec" ":std/build" ":std/build-std" ":std/ssi"
-    ;; cli
+    ;; cli (3)
     ":std/cli/multicall" ":std/cli/print-exit" ":std/cli/shell"
-    ;; more misc
-    ":std/misc/rwlock"
-    ;; event, interface, debug
+    ;; event, interface, generic (5)
     ":std/getopt" ":std/event" ":std/interface"
     ":std/generic/dispatch" ":std/generic/macros"
-    ":std/debug/DBG"
-    ;; markup
+    ;; debug (4)
+    ":std/debug/DBG" ":std/debug/heap" ":std/debug/threads" ":std/debug/memleak"
+    ;; markup (4)
     ":std/markup/sxml" ":std/markup/html" ":std/markup/xml" ":std/markup/tal"
-    ;; mime
+    ;; markup/sxml sub-modules (11)
+    ":std/markup/sxml/print" ":std/markup/sxml/ssax"
+    ":std/markup/sxml/sxml-inf" ":std/markup/sxml/sxpath" ":std/markup/sxml/xml"
+    ":std/markup/sxml/html/parser" ":std/markup/sxml/html/tal"
+    ":std/markup/sxml/tal/syntax" ":std/markup/sxml/tal/parser"
+    ":std/markup/sxml/tal/iter" ":std/markup/sxml/tal/expander"
+    ":std/markup/sxml/tal/toplevel"
+    ;; mime (2)
     ":std/mime/types" ":std/mime/struct"
-    ;; parser
+    ;; protobuf (1)
+    ":std/protobuf/io"
+    ;; parser (10)
     ":std/parser/base" ":std/parser/lexer"
-    ":std/parser/deflexer" ":std/parser/defparser" ":std/parser/grammar"))
+    ":std/parser/deflexer" ":std/parser/defparser" ":std/parser/grammar"
+    ":std/parser/stream" ":std/parser/ll1" ":std/parser/rlang"
+    ":std/parser/rx-parser" ":std/parser/grammar-reader"))
 
 (for-each (lambda (mod)
   (check (string-append "load " mod)
