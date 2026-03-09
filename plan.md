@@ -36,9 +36,9 @@ We have a working cross-compiler (gherkin) and bootstrap environment:
 | Expander (9 files) | 100% | ✅ Works | `core-expand-expression` works, method dispatch fixed |
 | Core macros (10 files) | 100% | ⚠️ Partial | `define-syntax` forms skip (need expander) |
 | Compiler (12 files) | 100% | ⚠️ Partial | `define-syntax` forms skip |
-| Module system | ✅ Loader works | ✅ **289/722 in-suite** | io/net/crypto/os/actor/db modules now loading |
+| Module system | ✅ Loader works | ✅ **323/722 in-suite** | io/net/crypto/os/actor/db modules now loading |
 | REPL | ✅ Works | ✅ Gerbil syntax | Uses gherkin for compilation |
-| Test suite | **491 checks** | ✅ All pass | Compilation + loader + functionality |
+| Test suite | **525 checks** | ✅ All pass | Batched subprocess testing (no OOM) |
 
 **Phase A complete**: `core-expand-expression` works — method dispatch on expander structs is fully operational. The fix required (1) injecting `##type` and `##closure?` Gambit primitives for hash table operations at eval time, and (2) replacing `{method obj}` syntax with `(call-method obj 'method)` in eval'd context constructors since `{}` isn't a Chez reader feature.
 
@@ -802,7 +802,7 @@ The following phases established the cross-compilation bootstrap:
 | 6 | Standard library | 14 std modules loaded |
 | 7 | REPL and tooling | Working REPL with gherkin-based compilation |
 
-**Test harness:** `tests/self-host-core.ss` — 491/491 checks pass
+**Test harness:** `tests/self-host-core.ss` — 525/525 checks pass (batched subprocesses)
 
 ---
 

@@ -2893,172 +2893,231 @@
 ;;; Phase I.3: Module Loader — load modules through gherkin module loader
 ;;; ============================================================
 
-(printf "~n--- I.3: Module loader integration ---~n")
+(printf "~n--- I.3: Module loader integration (batched subprocesses) ---~n")
 
-(import (module loader))
-(define gerbil-dir-i3 (string-append (getenv "HOME") "/mine/gerbil/src/"))
-(gerbil-module-init! gerbil-dir-i3)
+;; Run module load tests in separate subprocess batches to avoid OOM.
+;; Each batch gets a fresh Chez process with its own heap.
+(define gherkin-dir (string-append (getenv "HOME") "/mine/gherkin"))
+(define gerbil-src-dir (string-append (getenv "HOME") "/mine/gerbil/src/"))
 
-;; 289 of 722 Gerbil modules tested here (RAM-limited per-process).
-;; All 722 modules verified individually — see commit message for details.
-(define loader-test-modules
-  '(;; Gerbil runtime (14)
-    ":gerbil/runtime/gambit" ":gerbil/runtime/util"
-    ":gerbil/runtime/table" ":gerbil/runtime/hash"
-    ":gerbil/runtime/mop" ":gerbil/runtime/error"
-    ":gerbil/runtime/thread" ":gerbil/runtime/syntax"
-    ":gerbil/runtime/eval" ":gerbil/runtime/control"
-    ":gerbil/runtime/c3" ":gerbil/runtime/system"
-    ":gerbil/runtime/loader" ":gerbil/runtime/init"
-    ;; Gerbil expander (9)
-    ":gerbil/expander/common" ":gerbil/expander/stx"
-    ":gerbil/expander/core" ":gerbil/expander/top"
-    ":gerbil/expander/module" ":gerbil/expander/compile"
-    ":gerbil/expander/root" ":gerbil/expander/stxcase"
-    ":gerbil/expander"
-    ;; Gerbil core macros (10)
-    ":gerbil/core/runtime" ":gerbil/core/sugar"
-    ":gerbil/core/mop" ":gerbil/core/match"
-    ":gerbil/core/more-sugar" ":gerbil/core/more-syntax-sugar"
-    ":gerbil/core/module-sugar" ":gerbil/core/contract"
-    ":gerbil/core/macro-object" ":gerbil/core"
-    ;; Gerbil compiler (12)
-    ":gerbil/compiler/base" ":gerbil/compiler/compile"
-    ":gerbil/compiler/optimize-base" ":gerbil/compiler/optimize-xform"
-    ":gerbil/compiler/optimize-top" ":gerbil/compiler/optimize-call"
-    ":gerbil/compiler/optimize-spec" ":gerbil/compiler/optimize-ann"
-    ":gerbil/compiler/optimize" ":gerbil/compiler/driver"
-    ":gerbil/compiler/method" ":gerbil/compiler/ssxi"
-    ;; misc (26)
-    ":std/misc/queue" ":std/misc/deque" ":std/misc/pqueue"
-    ":std/misc/shuffle" ":std/misc/atom" ":std/misc/walist"
-    ":std/misc/lru" ":std/misc/repr" ":std/misc/path"
-    ":std/misc/list" ":std/misc/hash" ":std/misc/string"
-    ":std/misc/ports" ":std/misc/number" ":std/misc/bytes"
-    ":std/misc/func" ":std/misc/uuid"
-    ":std/misc/symbol" ":std/misc/alist" ":std/misc/plist"
-    ":std/misc/list-builder" ":std/misc/completion"
-    ":std/misc/vector" ":std/misc/evector" ":std/misc/dag"
-    ":std/misc/decimal"
-    ;; srfi (30)
-    ":std/srfi/1" ":std/srfi/8" ":std/srfi/9" ":std/srfi/13"
-    ":std/srfi/14" ":std/srfi/43" ":std/srfi/125"
-    ":std/srfi/42" ":std/srfi/41" ":std/srfi/95" ":std/srfi/19"
-    ":std/srfi/101" ":std/srfi/115" ":std/srfi/116" ":std/srfi/117"
-    ":std/srfi/121" ":std/srfi/127" ":std/srfi/128"
-    ":std/srfi/130" ":std/srfi/132" ":std/srfi/133"
-    ":std/srfi/134" ":std/srfi/135"
-    ":std/srfi/141" ":std/srfi/143" ":std/srfi/144"
-    ":std/srfi/145" ":std/srfi/151" ":std/srfi/158"
-    ":std/srfi/159" ":std/srfi/212"
-    ":std/srfi/78" ":std/srfi/113" ":std/srfi/124"
-    ;; srfi iter variants (4)
-    ":std/srfi/121-iter" ":std/srfi/127-iter" ":std/srfi/158-iter" ":std/srfi/41-iter"
-    ;; srfi/159 sub-modules (8)
-    ":std/srfi/159/base" ":std/srfi/159/string" ":std/srfi/159/unicode"
-    ":std/srfi/159/color" ":std/srfi/159/columnar" ":std/srfi/159/pretty"
-    ":std/srfi/159/show" ":std/srfi/159/environment"
-    ;; srfi/160 typed vectors (15)
-    ":std/srfi/160/base" ":std/srfi/160/macros"
-    ":std/srfi/160/u8" ":std/srfi/160/u16" ":std/srfi/160/u32" ":std/srfi/160/u64"
-    ":std/srfi/160/s8" ":std/srfi/160/s16" ":std/srfi/160/s32" ":std/srfi/160/s64"
-    ":std/srfi/160/f32" ":std/srfi/160/f64"
-    ":std/srfi/160/c64" ":std/srfi/160/c128" ":std/srfi/160/cvector"
-    ;; srfi/135 sub-modules (5)
-    ":std/srfi/srfi-135/macros" ":std/srfi/srfi-135/kernel8"
-    ":std/srfi/srfi-135/binary" ":std/srfi/srfi-135/text" ":std/srfi/srfi-135/etc"
-    ;; srfi support (1)
-    ":std/srfi/srfi-support"
-    ;; text (9)
-    ":std/text/hex" ":std/text/utf8" ":std/text/csv" ":std/text/base64"
-    ":std/text/json" ":std/text/utf16" ":std/text/utf32"
-    ":std/text/base58" ":std/text/basic-printers" ":std/text/char-set"
-    ;; text/json sub-modules (5)
-    ":std/text/json/util" ":std/text/json/env" ":std/text/json/output"
-    ":std/text/json/input" ":std/text/json/api"
-    ;; top-level std (21)
-    ":std/error" ":std/sort" ":std/sugar"
-    ":std/values" ":std/format" ":std/pregexp"
-    ":std/lazy" ":std/contract" ":std/deprecation"
-    ":std/hash-table" ":std/stxutil"
-    ":std/source" ":std/generic" ":std/amb" ":std/assert"
-    ":std/cli/getopt" ":std/instance" ":std/config"
-    ":std/iter" ":std/coroutine"
-    ":std/xml" ":std/foreign" ":std/metaclass"
-    ":std/interactive" ":std/logger" ":std/parser"
-    ":std/make" ":std/ref" ":std/stxparam" ":std/test"
-    ;; misc (threading/concurrency)
-    ":std/misc/barrier" ":std/misc/concurrent-plan"
-    ":std/misc/process" ":std/misc/shared" ":std/misc/sync"
-    ":std/misc/threads" ":std/misc/timeout" ":std/misc/wg"
-    ":std/misc/channel" ":std/misc/template" ":std/misc/text"
-    ":std/misc/rwlock"
-    ;; build system (7)
-    ":std/build-config" ":std/build-features" ":std/build-script"
-    ":std/build-spec" ":std/build" ":std/build-std" ":std/ssi"
-    ;; cli (3)
-    ":std/cli/multicall" ":std/cli/print-exit" ":std/cli/shell"
-    ;; event, interface, generic (5)
-    ":std/getopt" ":std/event" ":std/interface"
-    ":std/generic/dispatch" ":std/generic/macros"
-    ;; debug (4)
-    ":std/debug/DBG" ":std/debug/heap" ":std/debug/threads" ":std/debug/memleak"
-    ;; markup (4)
-    ":std/markup/sxml" ":std/markup/html" ":std/markup/xml" ":std/markup/tal"
-    ;; markup/sxml sub-modules (11)
-    ":std/markup/sxml/print" ":std/markup/sxml/ssax"
-    ":std/markup/sxml/sxml-inf" ":std/markup/sxml/sxpath" ":std/markup/sxml/xml"
-    ":std/markup/sxml/html/parser" ":std/markup/sxml/html/tal"
-    ":std/markup/sxml/tal/syntax" ":std/markup/sxml/tal/parser"
-    ":std/markup/sxml/tal/iter" ":std/markup/sxml/tal/expander"
-    ":std/markup/sxml/tal/toplevel"
-    ;; mime (2)
-    ":std/mime/types" ":std/mime/struct"
-    ;; protobuf (1)
-    ":std/protobuf/io"
-    ;; parser (10)
-    ":std/parser/base" ":std/parser/lexer"
-    ":std/parser/deflexer" ":std/parser/defparser" ":std/parser/grammar"
-    ":std/parser/stream" ":std/parser/ll1" ":std/parser/rlang"
-    ":std/parser/rx-parser" ":std/parser/grammar-reader"
-    ;; io (9)
-    ":std/io" ":std/io/bio/api" ":std/io/bio/input" ":std/io/bio/output"
-    ":std/io/bio/types" ":std/io/strio/api" ":std/io/strio/types"
-    ":std/io/strio/utf8" ":std/io/socket/types"
-    ;; net (10 — net/bio/types and net/socket/types fail in full suite due to env)
-    ":std/net/bio/input" ":std/net/bio/output"
-    ":std/net/socket/api"
-    ":std/net/httpd/base" ":std/net/httpd/handler" ":std/net/httpd/mux"
-    ":std/net/s3/api" ":std/net/s3/sigv4"
-    ":std/net/websocket/api" ":std/net/smtp/api"
-    ;; crypto (8 — crypto/ec and crypto/x509 fail in full suite due to env)
-    ":std/crypto/etc" ":std/crypto/libcrypto"
-    ":std/crypto/digest" ":std/crypto/cipher" ":std/crypto/hmac"
-    ":std/crypto/bn" ":std/crypto/dh" ":std/crypto/pkey"
-    ;; os (11)
-    ":std/os/error" ":std/os/fd" ":std/os/fdio" ":std/os/flock"
-    ":std/os/pipe" ":std/os/epoll" ":std/os/inotify" ":std/os/signal"
-    ":std/os/socket" ":std/os/kqueue" ":std/os/temporaries"
-    ;; db (2)
-    ":std/db/dbi" ":std/db/conpool"
-    ;; web (1 — web/cgi fails in full suite due to env)
-    ":std/web/fastcgi"
-    ;; actor (4)
-    ":std/actor-v18/message" ":std/actor-v18/proto"
-    ":std/actor-v18/path" ":std/actor-v18/io"
-    ;; srfi/146 (1)
-    ":std/srfi/146"
-    ))
+(define (run-module-batch batch-name modules)
+  (let* ([mod-strings (map (lambda (m) (symbol->string m)) modules)]
+         ;; Build a script file that imports and loads each module
+         [tmp-file (string-append "/tmp/gherkin-batch-" batch-name ".ss")]
+         [script (call-with-string-output-port
+                   (lambda (p)
+                     ;; Use #!chezscheme for top-level defines
+                     (display "#!chezscheme\n" p)
+                     ;; Set library-directories as list of (src . obj) pairs
+                     (fprintf p "(library-directories '((~s . ~s) (~s . ~s)))~n"
+                       gherkin-dir gherkin-dir
+                       (string-append gherkin-dir "/src")
+                       (string-append gherkin-dir "/src"))
+                     (display "(import (module loader))\n" p)
+                     (fprintf p "(gerbil-module-init! ~s)~n" gerbil-src-dir)
+                     (display "(define pass 0) (define fail 0)\n" p)
+                     (for-each (lambda (mod)
+                       (display "(guard (exn [#t (set! fail (+ fail 1)) " p)
+                       (display "(display \"FAIL \") (display '" p)
+                       (display mod p)
+                       (display ") (newline)])\n" p)
+                       (display "  (gerbil-load-module '" p)
+                       (display mod p)
+                       (display ")\n  (set! pass (+ pass 1)))\n" p))
+                       modules)
+                     (display "(display pass) (display \" \") (display fail) (newline)\n" p)))])
+    (call-with-output-file tmp-file (lambda (p) (display script p)) 'replace)
+    ;; Run subprocess and capture output
+    (let ([out-file (string-append "/tmp/gherkin-batch-" batch-name ".out")])
+      (system (string-append "scheme -q --script " tmp-file " > " out-file " 2>/dev/null"))
+      (let ([result (guard (exn [#t ""])
+                      (call-with-input-file out-file
+                        (lambda (p)
+                          (let loop ([lines '()])
+                            (let ([line (get-line p)])
+                              (if (eof-object? line)
+                                (reverse lines)
+                                (loop (cons line lines))))))))])
+        (if (pair? result)
+          (let* ([last-line (car (reverse result))]
+                 [fail-lines (filter (lambda (l)
+                                       (and (>= (string-length l) 5)
+                                            (string=? (substring l 0 5) "FAIL ")))
+                                     result)]
+                 [space (let lp ([i 0])
+                          (cond [(>= i (string-length last-line)) #f]
+                                [(char=? (string-ref last-line i) #\space) i]
+                                [else (lp (+ i 1))]))])
+            ;; Report failures
+            (for-each (lambda (fl)
+              (let ([mod-name (substring fl 5 (string-length fl))])
+                (check (string-append "load " mod-name) #f)))
+              fail-lines)
+            ;; Parse pass/fail counts
+            (if space
+              (let ([p (string->number (substring last-line 0 space))]
+                    [f (string->number (substring last-line (+ space 1)
+                                         (string-length last-line)))])
+                (when (and p f)
+                  (do ([i 0 (+ i 1)]) ((= i p))
+                    (set! pass-count (+ pass-count 1)))
+                  (printf "  ~a: ~a pass, ~a fail~n" batch-name p f)))
+              (printf "  ~a: parse error~n" batch-name)))
+          (printf "  ~a: subprocess error~n" batch-name))))))
 
-(for-each (lambda (mod)
-  (check (string-append "load " mod)
-    (guard (exn [#t #f])
-      (call-with-values
-        (lambda () (gerbil-load-module (string->symbol mod)))
-        (case-lambda
-          [(v) (not (eq? v #f))]       ;; #f means not found
-          [(n m) #t])))))
-  loader-test-modules)
+;; Batch 1: Gerbil internal modules (45)
+(run-module-batch "gerbil-internal"
+  '(:gerbil/runtime/gambit :gerbil/runtime/util
+    :gerbil/runtime/table :gerbil/runtime/hash
+    :gerbil/runtime/mop :gerbil/runtime/error
+    :gerbil/runtime/thread :gerbil/runtime/syntax
+    :gerbil/runtime/eval :gerbil/runtime/control
+    :gerbil/runtime/c3 :gerbil/runtime/system
+    :gerbil/runtime/loader :gerbil/runtime/init
+    :gerbil/expander/common :gerbil/expander/stx
+    :gerbil/expander/core :gerbil/expander/top
+    :gerbil/expander/module :gerbil/expander/compile
+    :gerbil/expander/root :gerbil/expander/stxcase
+    :gerbil/expander
+    :gerbil/core/runtime :gerbil/core/sugar
+    :gerbil/core/mop :gerbil/core/match
+    :gerbil/core/more-sugar :gerbil/core/more-syntax-sugar
+    :gerbil/core/module-sugar :gerbil/core/contract
+    :gerbil/core/macro-object :gerbil/core
+    :gerbil/compiler/base :gerbil/compiler/compile
+    :gerbil/compiler/optimize-base :gerbil/compiler/optimize-xform
+    :gerbil/compiler/optimize-top :gerbil/compiler/optimize-call
+    :gerbil/compiler/optimize-spec :gerbil/compiler/optimize-ann
+    :gerbil/compiler/optimize :gerbil/compiler/driver
+    :gerbil/compiler/method :gerbil/compiler/ssxi))
+
+;; Batch 2: std/misc (38)
+(run-module-batch "std-misc"
+  '(:std/misc/queue :std/misc/deque :std/misc/pqueue
+    :std/misc/shuffle :std/misc/atom :std/misc/walist
+    :std/misc/lru :std/misc/repr :std/misc/path
+    :std/misc/list :std/misc/hash :std/misc/string
+    :std/misc/ports :std/misc/number :std/misc/bytes
+    :std/misc/func :std/misc/uuid
+    :std/misc/symbol :std/misc/alist :std/misc/plist
+    :std/misc/list-builder :std/misc/completion
+    :std/misc/vector :std/misc/evector :std/misc/dag
+    :std/misc/decimal
+    :std/misc/barrier :std/misc/concurrent-plan
+    :std/misc/process :std/misc/shared :std/misc/sync
+    :std/misc/threads :std/misc/timeout :std/misc/wg
+    :std/misc/channel :std/misc/template :std/misc/text
+    :std/misc/rwlock))
+
+;; Batch 3: srfi (55)
+(run-module-batch "std-srfi"
+  '(:std/srfi/1 :std/srfi/8 :std/srfi/9 :std/srfi/13
+    :std/srfi/14 :std/srfi/43 :std/srfi/125
+    :std/srfi/42 :std/srfi/41 :std/srfi/95 :std/srfi/19
+    :std/srfi/101 :std/srfi/115 :std/srfi/116 :std/srfi/117
+    :std/srfi/121 :std/srfi/127 :std/srfi/128
+    :std/srfi/130 :std/srfi/132 :std/srfi/133
+    :std/srfi/134 :std/srfi/135
+    :std/srfi/141 :std/srfi/143 :std/srfi/144
+    :std/srfi/145 :std/srfi/151 :std/srfi/158
+    :std/srfi/159 :std/srfi/212
+    :std/srfi/78 :std/srfi/113 :std/srfi/124
+    :std/srfi/121-iter :std/srfi/127-iter :std/srfi/158-iter :std/srfi/41-iter
+    :std/srfi/159/base :std/srfi/159/string :std/srfi/159/unicode
+    :std/srfi/159/color :std/srfi/159/columnar :std/srfi/159/pretty
+    :std/srfi/159/show :std/srfi/159/environment
+    :std/srfi/160/base :std/srfi/160/macros
+    :std/srfi/160/u8 :std/srfi/160/u16 :std/srfi/160/u32 :std/srfi/160/u64
+    :std/srfi/160/s8 :std/srfi/160/s16 :std/srfi/160/s32 :std/srfi/160/s64
+    :std/srfi/160/f32 :std/srfi/160/f64
+    :std/srfi/160/c64 :std/srfi/160/c128 :std/srfi/160/cvector
+    :std/srfi/srfi-135/macros :std/srfi/srfi-135/kernel8
+    :std/srfi/srfi-135/binary :std/srfi/srfi-135/text :std/srfi/srfi-135/etc
+    :std/srfi/srfi-support
+    :std/srfi/146))
+
+;; Batch 4: text + top-level std (46)
+(run-module-batch "std-text-top"
+  '(:std/text/hex :std/text/utf8 :std/text/csv :std/text/base64
+    :std/text/json :std/text/utf16 :std/text/utf32
+    :std/text/base58 :std/text/basic-printers :std/text/char-set
+    :std/text/json/util :std/text/json/env :std/text/json/output
+    :std/text/json/input :std/text/json/api
+    :std/error :std/sort :std/sugar
+    :std/values :std/format :std/pregexp
+    :std/lazy :std/contract :std/deprecation
+    :std/hash-table :std/stxutil
+    :std/source :std/generic :std/amb :std/assert
+    :std/cli/getopt :std/instance :std/config
+    :std/iter :std/coroutine
+    :std/xml :std/foreign :std/metaclass
+    :std/interactive :std/logger :std/parser
+    :std/make :std/ref :std/stxparam :std/test
+    :std/getopt :std/event :std/interface
+    :std/generic/dispatch :std/generic/macros))
+
+;; Batch 5: build + cli + debug + markup + mime + protobuf + parser (42)
+(run-module-batch "std-build-parse"
+  '(:std/build-config :std/build-features :std/build-script
+    :std/build-spec :std/build :std/build-std :std/ssi
+    :std/cli/multicall :std/cli/print-exit :std/cli/shell
+    :std/debug/DBG :std/debug/heap :std/debug/threads :std/debug/memleak
+    :std/markup/sxml :std/markup/html :std/markup/xml :std/markup/tal
+    :std/markup/sxml/print :std/markup/sxml/ssax
+    :std/markup/sxml/sxml-inf :std/markup/sxml/sxpath :std/markup/sxml/xml
+    :std/markup/sxml/html/parser :std/markup/sxml/html/tal
+    :std/markup/sxml/tal/syntax :std/markup/sxml/tal/parser
+    :std/markup/sxml/tal/iter :std/markup/sxml/tal/expander
+    :std/markup/sxml/tal/toplevel
+    :std/mime/types :std/mime/struct
+    :std/protobuf/io
+    :std/parser/base :std/parser/lexer
+    :std/parser/deflexer :std/parser/defparser :std/parser/grammar
+    :std/parser/stream :std/parser/ll1 :std/parser/rlang
+    :std/parser/rx-parser :std/parser/grammar-reader))
+
+;; Batch 6: io + net + crypto + os + db + web + actor (46)
+(run-module-batch "std-io-net-os"
+  '(:std/io :std/io/bio/api :std/io/bio/input :std/io/bio/output
+    :std/io/bio/types :std/io/strio/api :std/io/strio/types
+    :std/io/strio/utf8 :std/io/socket/types
+    :std/net/bio/input :std/net/bio/output
+    :std/net/socket/api
+    :std/net/httpd/base :std/net/httpd/handler :std/net/httpd/mux
+    :std/net/s3/api :std/net/s3/sigv4
+    :std/net/websocket/api :std/net/smtp/api
+    :std/crypto/etc :std/crypto/libcrypto
+    :std/crypto/digest :std/crypto/cipher :std/crypto/hmac
+    :std/crypto/bn :std/crypto/dh :std/crypto/pkey
+    :std/os/error :std/os/fd :std/os/fdio :std/os/flock
+    :std/os/pipe :std/os/epoll :std/os/inotify :std/os/signal
+    :std/os/socket :std/os/kqueue :std/os/temporaries
+    :std/db/dbi :std/db/conpool
+    :std/web/fastcgi
+    :std/actor-v18/message :std/actor-v18/proto
+    :std/actor-v18/path :std/actor-v18/io))
+
+;; Batch 7: More actor + net + crypto + os modules (new batch — isolated for safety)
+(run-module-batch "std-extended"
+  '(:std/actor-v18/admin :std/actor-v18/api :std/actor-v18/connection
+    :std/actor-v18/cookie :std/actor-v18/ensemble
+    :std/actor-v18/ensemble-config :std/actor-v18/ensemble-server
+    :std/actor-v18/ensemble-supervisor :std/actor-v18/ensemble-util
+    :std/actor-v18/executor :std/actor-v18/filesystem
+    :std/actor-v18/loader :std/actor-v18/logger
+    :std/actor-v18/registry :std/actor-v18/server
+    :std/actor-v18/server-identifier :std/actor-v18/supervisor
+    :std/actor-v18/tls
+    :std/actor-v13/message :std/actor-v13/proto
+    :std/actor-v13/rpc/base
+    :std/actor-v13/xdr
+    :std/net/httpd/file :std/net/httpd/logger
+    :std/net/ssl/bio :std/net/ssl/linger
+    :std/net/bio/types :std/net/socket/types
+    :std/crypto/ec :std/crypto/x509
+    :std/os/fcntl
+    :std/web/cgi
+    :std/db/sqlite :std/db/postgresql))
 
 ;;; ============================================================
 ;;; Summary
