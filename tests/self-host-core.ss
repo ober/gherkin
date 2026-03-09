@@ -2079,13 +2079,20 @@
                             [else
                              (loop (cdr forms) (cons c result))])))))))])
         ;; Eval compiled forms (flatten begin blocks so individual errors don't kill group)
+        ;; Also filter out import/export/empty-begin that survived compilation
         (define (flatten-begins forms)
           (let loop ([fs forms] [result '()])
             (if (null? fs) (reverse result)
               (let ([c (car fs)])
-                (if (and (pair? c) (eq? (car c) 'begin) (pair? (cdr c)))
-                  (loop (cdr fs) (append (reverse (flatten-begins (cdr c))) result))
-                  (loop (cdr fs) (cons c result)))))))
+                (cond
+                  [(and (pair? c) (eq? (car c) 'begin) (pair? (cdr c)))
+                   (loop (cdr fs) (append (reverse (flatten-begins (cdr c))) result))]
+                  [(and (pair? c) (memq (car c) '(import export)))
+                   (loop (cdr fs) result)]
+                  [(equal? c '(begin))
+                   (loop (cdr fs) result)]
+                  [else
+                   (loop (cdr fs) (cons c result))])))))
         (let ([flat (flatten-begins compiled)])
           (printf "  [ci forms: ~a compiled, ~a flat]~n" (length compiled) (length flat))
           (let ([ok 0] [err 0])
