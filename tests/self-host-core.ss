@@ -2602,6 +2602,8 @@
       (printf "  ~a: subprocess error~n" batch-name))))
 
 ;; Write the module-loader preamble to a script port
+;; Uses _tp_/_tf_ names to avoid collision with loaded Gerbil modules
+;; (e.g. std/net/sasl defines 'fail' as a defrule)
 (define (write-loader-preamble p)
   (let ([gherkin-dir (string-append (getenv "HOME") "/mine/gherkin")]
         [gerbil-src-dir (string-append (getenv "HOME") "/mine/gerbil/src/")])
@@ -2612,15 +2614,15 @@
       (string-append gherkin-dir "/src"))
     (display "(import (module loader))\n" p)
     (fprintf p "(gerbil-module-init! ~s)~n" gerbil-src-dir)
-    (display "(define pass 0) (define fail 0)\n" p)
+    (display "(define _tp_ 0) (define _tf_ 0)\n" p)
     (display "(define (t! name ok)\n" p)
-    (display "  (if ok (set! pass (+ pass 1))\n" p)
-    (display "    (begin (set! fail (+ fail 1))\n" p)
+    (display "  (if ok (set! _tp_ (+ _tp_ 1))\n" p)
+    (display "    (begin (set! _tf_ (+ _tf_ 1))\n" p)
     (display "      (display \"FAIL \") (display name) (newline))))\n" p)))
 
 ;; Write subprocess result footer
 (define (write-result-footer p)
-  (display "(display pass) (display \" \") (display fail) (newline)\n" p))
+  (display "(display _tp_) (display \" \") (display _tf_) (newline)\n" p))
 
 ;; Run a functionality batch — writer-proc takes a port and writes test code
 (define (run-functionality-batch batch-name writer-proc)
@@ -2959,13 +2961,13 @@
                    (lambda (p)
                      (write-loader-preamble p)
                      (for-each (lambda (mod)
-                       (display "(guard (exn [#t (set! fail (+ fail 1)) " p)
+                       (display "(guard (exn [#t (set! _tf_ (+ _tf_ 1)) " p)
                        (display "(display \"FAIL \") (display '" p)
                        (display mod p)
                        (display ") (newline)])\n" p)
                        (display "  (gerbil-load-module '" p)
                        (display mod p)
-                       (display ")\n  (set! pass (+ pass 1)))\n" p))
+                       (display ")\n  (set! _tp_ (+ _tp_ 1)))\n" p))
                        modules)
                      (write-result-footer p)))])
     (call-with-output-file tmp-file (lambda (p) (display script p)) 'replace)
