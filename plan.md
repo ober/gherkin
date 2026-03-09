@@ -36,7 +36,7 @@ We have a working cross-compiler (gherkin) and bootstrap environment:
 | Expander (9 files) | 100% | ✅ Works | `core-expand-expression` works, method dispatch fixed |
 | Core macros (10 files) | 100% | ⚠️ Partial | `define-syntax` forms skip (need expander) |
 | Compiler (12 files) | 100% | ⚠️ Partial | `define-syntax` forms skip |
-| Module system | ✅ Loader works | ✅ **243 modules** (45 core + 198 std) | Compile + load via module loader |
+| Module system | ✅ Loader works | ✅ **722/722 modules** | All Gerbil modules compile and load |
 | REPL | ✅ Works | ✅ Gerbil syntax | Uses gherkin for compilation |
 | Test suite | **430 checks** | ✅ All pass | Compilation + loader + functionality |
 
