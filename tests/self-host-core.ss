@@ -2609,6 +2609,37 @@
   (check "func compose"
     (= (eval '((compose car cdr) (list 1 2 3))) 2)))
 
+;; string-split
+(guard (exn [#t
+  (printf "  G.2b string-split error: ~a~n" (if (message-condition? exn) (condition-message exn) exn))
+  (check "string-split works" #f)])
+  (eval '(gerbil-load-module ':std/misc/string))
+  (check "string-split works"
+    (equal? (eval '(string-split "a,b,c" #\,)) '("a" "b" "c"))))
+
+;; flatten
+(guard (exn [#t
+  (printf "  G.2b flatten error: ~a~n" (if (message-condition? exn) (condition-message exn) exn))
+  (check "flatten works" #f)])
+  (eval '(gerbil-load-module ':std/misc/list))
+  (check "flatten works"
+    (equal? (eval '(flatten '(1 (2 (3 4)) 5))) '(1 2 3 4 5))))
+
+;; queue operations
+(guard (exn [#t
+  (printf "  G.2b queue error: ~a~n" (if (message-condition? exn) (condition-message exn) exn))
+  (check "queue operations" #f)])
+  (eval '(gerbil-load-module ':std/misc/queue))
+  (check "queue operations"
+    (= (eval '(let ([q (make-queue)]) (enqueue! q 1) (enqueue! q 2) (dequeue! q))) 1)))
+
+;; number->string base 16
+(guard (exn [#t
+  (printf "  G.2b number error: ~a~n" (if (message-condition? exn) (condition-message exn) exn))
+  (check "number->string base 16" #f)])
+  (check "number->string base 16"
+    (equal? (eval '(number->string 255 16)) "FF")))
+
 ;; G.3: Import misc modules
 (printf "~n--- G.3: Misc modules ---~n")
 
