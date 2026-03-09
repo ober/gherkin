@@ -38,7 +38,7 @@ We have a working cross-compiler (gherkin) and bootstrap environment:
 | Compiler (12 files) | 100% | ⚠️ Partial | `define-syntax` forms skip |
 | Module system | ✅ Loader works | ✅ **423 modules** | 9 batched subprocesses, 6 failures |
 | REPL | ✅ Works | ✅ Gerbil syntax | Uses gherkin for compilation |
-| Test suite | **625 checks** | ✅ All pass | Batched subprocess testing (no OOM) |
+| Test suite | **647 checks** | ✅ All pass | Batched subprocess testing (no OOM) |
 
 **Phase A complete**: `core-expand-expression` works — method dispatch on expander structs is fully operational. The fix required (1) injecting `##type` and `##closure?` Gambit primitives for hash table operations at eval time, and (2) replacing `{method obj}` syntax with `(call-method obj 'method)` in eval'd context constructors since `{}` isn't a Chez reader feature.
 
@@ -802,7 +802,7 @@ The following phases established the cross-compilation bootstrap:
 | 6 | Standard library | 14 std modules loaded |
 | 7 | REPL and tooling | Working REPL with gherkin-based compilation |
 
-**Test harness:** `tests/self-host-core.ss` — 625/625 checks pass (9 batched subprocesses, 423 modules)
+**Test harness:** `tests/self-host-core.ss` — 647/647 checks pass (9 batched subprocesses, 423 modules)
 
 ---
 
