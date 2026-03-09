@@ -182,8 +182,16 @@
 (define inject-fn inject)
 
 ;; Save Chez's native syntax before expander clobbers them
-(define saved-set!-syntax (top-level-syntax 'set! (interaction-environment)))
-(define saved-parameterize-syntax (top-level-syntax 'parameterize (interaction-environment)))
+(define chez-syntax-keywords
+  '(set! parameterize let let* letrec letrec* lambda case-lambda
+    if cond case when unless and or begin define define-syntax
+    let-syntax letrec-syntax syntax-rules syntax-case with-syntax
+    do quasiquote guard dynamic-wind values call-with-values
+    let-values define-values))
+(define saved-chez-syntax
+  (map (lambda (s)
+         (cons s (top-level-syntax s (interaction-environment))))
+       chez-syntax-keywords))
 
 ;; Gambit void and absent markers
 (inject-fn '%%void |%%void|)
@@ -2442,9 +2450,20 @@
     (eval `(core-import-module ',mod-sym))
     (check description #t)))
 
-;; Restore Chez's native syntax (Gerbil expander clobbers these)
-(define-top-level-syntax 'set! saved-set!-syntax (interaction-environment))
-(define-top-level-syntax 'parameterize saved-parameterize-syntax (interaction-environment))
+;; Restore Chez's native syntax (Gerbil expander clobbers some of these)
+;; First, report which ones were clobbered
+(let ([clobbered '()])
+  (for-each (lambda (pair)
+    (let ([name (car pair)])
+      (unless (top-level-syntax? name (interaction-environment))
+        (set! clobbered (cons name clobbered)))))
+    saved-chez-syntax)
+  (unless (null? clobbered)
+    (printf "  [Restoring clobbered syntax: ~a]~n" clobbered)))
+;; Restore all saved syntax
+(for-each (lambda (pair)
+  (define-top-level-syntax (car pair) (cdr pair) (interaction-environment)))
+  saved-chez-syntax)
 
 (printf "~n--- G.1: Pure Scheme modules ---~n")
 (test-gherkin-import ':std/error "import :std/error")
@@ -2468,6 +2487,51 @@
   (check "values module works" #f)])
   (check "values module works"
     (eqv? (eval '(call-with-values (lambda () (values 1 2 3)) (lambda (a . rest) a))) 1)))
+
+;; sort — verify sort and stable-sort work
+(guard (exn [#t
+  (printf "  G.2 sort error: ~a~n" (if (message-condition? exn) (condition-message exn) exn))
+  (check "sort works" #f)])
+  (check "sort works"
+    (equal? (eval '(sort '(3 1 4 1 5 9) <)) '(1 1 3 4 5 9))))
+
+(guard (exn [#t
+  (printf "  G.2 stable-sort error: ~a~n" (if (message-condition? exn) (condition-message exn) exn))
+  (check "stable-sort works" #f)])
+  (check "stable-sort works"
+    (equal? (eval '(stable-sort '(3 1 4 1 5 9) <)) '(1 1 3 4 5 9))))
+
+;; format — verify fmt and format~ work
+(guard (exn [#t
+  (printf "  G.2 format error: ~a~n" (if (message-condition? exn) (condition-message exn) exn))
+  (check "format works" #f)])
+  (check "format works"
+    (equal? (eval '(format "hello ~a ~a" "world" 42)) "hello world 42")))
+
+;; pregexp-replace
+(guard (exn [#t
+  (printf "  G.2 pregexp-replace error: ~a~n" (if (message-condition? exn) (condition-message exn) exn))
+  (check "pregexp-replace works" #f)])
+  (check "pregexp-replace works"
+    (equal? (eval '(pregexp-replace "[0-9]+" "abc123def" "NUM")) "abcNUMdef")))
+
+;; pregexp-split
+(guard (exn [#t
+  (printf "  G.2 pregexp-split error: ~a~n" (if (message-condition? exn) (condition-message exn) exn))
+  (check "pregexp-split works" #f)])
+  (check "pregexp-split works"
+    (equal? (eval '(pregexp-split "," "a,b,c")) '("a" "b" "c"))))
+
+;; hash-table — hash operations
+(guard (exn [#t
+  (printf "  G.2 hash error: ~a~n" (if (message-condition? exn) (condition-message exn) exn))
+  (check "hash-put!/hash-ref works" #f)])
+  (check "hash-put!/hash-ref works"
+    (equal? (eval '(let ([h (make-hash-table-eq)])
+                     (hash-put! h 'a 1)
+                     (hash-put! h 'b 2)
+                     (list (hash-ref h 'a) (hash-ref h 'b) (hash-length h))))
+            '(1 2 2))))
 
 ;; G.3: Import misc modules
 (printf "~n--- G.3: Misc modules ---~n")
