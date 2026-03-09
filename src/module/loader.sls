@@ -13,7 +13,8 @@
     gerbil-module-loaded?
     gerbil-loaded-modules
     gerbil-module-source-dir
-    *enable-cache*)
+    *enable-cache*
+    post-load-fixup!)
 
   (import
     (except (chezscheme) void box box? unbox set-box!
@@ -145,6 +146,11 @@
                               (class-instance-init! self 'message: message))))
         (Error::t . ,Error::t)
         (ContractViolation::t . ,ContractViolation::t)
+        ;; Constructor: (ContractViolation msg keyword-args...) → instance
+        (ContractViolation . ,(lambda (message . rest)
+                                (let ([inst (make-class-instance ContractViolation::t)])
+                                  (class-instance-init! inst (cons* 'message: message rest))
+                                  inst)))
         (error-message . ,error-message)
         (error-irritants . ,error-irritants)
         (error-trace . ,error-trace)
@@ -469,6 +475,11 @@
         (current-thread . ,(lambda () 'main-thread))
         ;; Fixnum extensions
         (fxnonnegative? . ,(lambda (x) (and (fixnum? x) (fx>=? x 0))))
+        ;; raise-bad-argument — Gerbil contract violation helper
+        (raise-bad-argument . ,(lambda (who expectation . irritants)
+                                  (apply assertion-violation 'gerbil
+                                    (string-append "bad argument — expected " expectation)
+                                    irritants)))
         ;; Pregexp (Gerbil uses gambit's pregexp which is loaded via the module)
         ;; These will be overridden when :std/pregexp loads, but we need stubs
         ;; so modules that reference them during compilation don't fail
@@ -948,6 +959,93 @@
                (set! *current-module-id* saved-mod))
 
              ;; Now compile and load this module
-             (compile-and-load-module mod-id source-path)])))))
+             (let ([result (compile-and-load-module mod-id source-path)])
+               ;; Post-load fixups for specific modules
+               (post-load-fixup! mod-id)
+               result)])))))
+
+  (define (post-load-fixup! mod-id)
+    ;; Format module: dispatch-table gets broken by defrules expansion
+    ;; (lambda gets stripped to a bare symbol). Reinitialize with correct lambdas.
+    (when (string=? mod-id "std/format")
+      (guard (exn [#t (when *verbose*
+                    (printf "  format fixup failed: ~a~n"
+                      (if (message-condition? exn) (condition-message exn) exn)))])
+        (let ([dt (eval 'dispatch-table)])
+          (when dt  ;; dispatch-table is a Gerbil HashTable (not Chez hash-table)
+            ;; ~a / ~A — display
+            (hash-put! dt #\a (lambda (char K xi rest)
+              (when (null? rest) (assertion-violation 'format "not enough arguments"))
+              (display (car rest)) (K xi (cdr rest))))
+            (hash-put! dt #\A (lambda (char K xi rest)
+              (when (null? rest) (assertion-violation 'format "not enough arguments"))
+              (display (car rest)) (K xi (cdr rest))))
+            ;; ~s / ~S — write
+            (hash-put! dt #\s (lambda (char K xi rest)
+              (when (null? rest) (assertion-violation 'format "not enough arguments"))
+              (write (car rest)) (K xi (cdr rest))))
+            (hash-put! dt #\S (lambda (char K xi rest)
+              (when (null? rest) (assertion-violation 'format "not enough arguments"))
+              (write (car rest)) (K xi (cdr rest))))
+            ;; ~c / ~C — write-char
+            (hash-put! dt #\c (lambda (char K xi rest)
+              (when (null? rest) (assertion-violation 'format "not enough arguments"))
+              (write-char (car rest)) (K xi (cdr rest))))
+            (hash-put! dt #\C (lambda (char K xi rest)
+              (when (null? rest) (assertion-violation 'format "not enough arguments"))
+              (write-char (car rest)) (K xi (cdr rest))))
+            ;; ~d — decimal number
+            (hash-put! dt #\d (lambda (char K xi rest)
+              (when (null? rest) (assertion-violation 'format "not enough arguments"))
+              (display (car rest)) (K xi (cdr rest))))
+            ;; ~x / ~X — hex
+            (hash-put! dt #\x (lambda (char K xi rest)
+              (when (null? rest) (assertion-violation 'format "not enough arguments"))
+              (display (number->string (car rest) 16)) (K xi (cdr rest))))
+            (hash-put! dt #\X (lambda (char K xi rest)
+              (when (null? rest) (assertion-violation 'format "not enough arguments"))
+              (display (number->string (car rest) 16)) (K xi (cdr rest))))
+            ;; ~o / ~O — octal
+            (hash-put! dt #\o (lambda (char K xi rest)
+              (when (null? rest) (assertion-violation 'format "not enough arguments"))
+              (display (number->string (car rest) 8)) (K xi (cdr rest))))
+            (hash-put! dt #\O (lambda (char K xi rest)
+              (when (null? rest) (assertion-violation 'format "not enough arguments"))
+              (display (number->string (car rest) 8)) (K xi (cdr rest))))
+            ;; ~b / ~B — binary
+            (hash-put! dt #\b (lambda (char K xi rest)
+              (when (null? rest) (assertion-violation 'format "not enough arguments"))
+              (display (number->string (car rest) 2)) (K xi (cdr rest))))
+            (hash-put! dt #\B (lambda (char K xi rest)
+              (when (null? rest) (assertion-violation 'format "not enough arguments"))
+              (display (number->string (car rest) 2)) (K xi (cdr rest))))
+            ;; ~~ — literal tilde
+            (hash-put! dt #\~ (lambda (char K xi rest)
+              (write-char #\~) (K xi rest)))
+            ;; ~n / ~N — newline
+            (hash-put! dt #\n (lambda (char K xi rest)
+              (newline) (K xi rest)))
+            (hash-put! dt #\N (lambda (char K xi rest)
+              (newline) (K xi rest)))
+            ;; ~% — newline (Gerbil convention)
+            (hash-put! dt #\% (lambda (char K xi rest)
+              (newline) (K xi rest)))
+            ;; ~! — flush output
+            (hash-put! dt #\! (lambda (char K xi rest)
+              (flush-output-port (current-output-port)) (K xi rest)))
+            ;; ~u / ~U — unsigned integer (same as display)
+            (hash-put! dt #\u (lambda (char K xi rest)
+              (when (null? rest) (assertion-violation 'format "not enough arguments"))
+              (display (car rest)) (K xi (cdr rest))))
+            (hash-put! dt #\U (lambda (char K xi rest)
+              (when (null? rest) (assertion-violation 'format "not enough arguments"))
+              (display (car rest)) (K xi (cdr rest))))
+            ;; ~r / ~R — recursive format (applies a function)
+            (hash-put! dt #\r (lambda (char K xi rest)
+              (when (null? rest) (assertion-violation 'format "not enough arguments"))
+              (display (car rest)) (K xi (cdr rest))))
+            (when *verbose*
+              (printf "  [format dispatch-table fixed: ~a entries]~n"
+                (hash-length dt))))))))
 
 ) ;; end library

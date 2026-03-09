@@ -2476,6 +2476,8 @@
 (test-gherkin-import ':std/error "import :std/error")
 (test-gherkin-import ':std/values "import :std/values")
 (test-gherkin-import ':std/pregexp "import :std/pregexp")
+(test-gherkin-import ':std/format "import :std/format")
+(eval '(post-load-fixup! "std/format"))  ;; fix dispatch-table after core-import-module clobbers it
 
 ;; G.2: Verify imported modules work
 (printf "~n--- G.2: Module functionality ---~n")
@@ -2508,12 +2510,18 @@
   (check "stable-sort works"
     (equal? (eval '(stable-sort '(3 1 4 1 5 9) <)) '(1 1 3 4 5 9))))
 
-;; format — verify fmt and format~ work
+;; format — verify Gerbil format with dispatch-table fixup
 (guard (exn [#t
   (printf "  G.2 format error: ~a~n" (if (message-condition? exn) (condition-message exn) exn))
   (check "format works" #f)])
   (check "format works"
     (equal? (eval '(format "hello ~a ~a" "world" 42)) "hello world 42")))
+(guard (exn [#t
+  (printf "  G.2 format-hex error: ~a~n" (if (message-condition? exn) (condition-message exn) exn))
+  (check "format hex works" #f)])
+  (let ([r (eval '(format "~x" 255))])
+    (check "format hex works"
+      (or (equal? r "ff") (equal? r "FF")))))
 
 ;; pregexp-replace
 (guard (exn [#t

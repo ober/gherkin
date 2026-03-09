@@ -515,7 +515,7 @@ Gerbil's `match` is a complex macro. Gherkin handles common cases (literal patte
 | `:std/misc/func` | ✅ Working | |
 | `:std/misc/completion` | ✅ Working | |
 | `:std/text/hex` | ✅ Working | |
-| `:std/format` | ✅ Working | Loads via module loader |
+| `:std/format` | ✅ Working | Loads + format ~a/~x verified via post-load-fixup! |
 | `:std/pregexp` | ✅ Working | Loads via module loader |
 | `:std/hash-table` | ✅ Working | Loads via module loader |
 | `:std/misc/string` | ✅ Working | Loads via module loader |
