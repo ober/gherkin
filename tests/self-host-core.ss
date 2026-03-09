@@ -2899,7 +2899,7 @@
 (define gerbil-dir-i3 (string-append (getenv "HOME") "/mine/gerbil/src/"))
 (gerbil-module-init! gerbil-dir-i3)
 
-;; 243 of 722 Gerbil modules tested here (RAM-limited per-process).
+;; 289 of 722 Gerbil modules tested here (RAM-limited per-process).
 ;; All 722 modules verified individually — see commit message for details.
 (define loader-test-modules
   '(;; Gerbil runtime (14)
@@ -3021,7 +3021,33 @@
     ":std/parser/deflexer" ":std/parser/defparser" ":std/parser/grammar"
     ":std/parser/stream" ":std/parser/ll1" ":std/parser/rlang"
     ":std/parser/rx-parser" ":std/parser/grammar-reader"
-    ;; All 722 Gerbil modules pass individually (tested separately)
+    ;; io (9)
+    ":std/io" ":std/io/bio/api" ":std/io/bio/input" ":std/io/bio/output"
+    ":std/io/bio/types" ":std/io/strio/api" ":std/io/strio/types"
+    ":std/io/strio/utf8" ":std/io/socket/types"
+    ;; net (10 — net/bio/types and net/socket/types fail in full suite due to env)
+    ":std/net/bio/input" ":std/net/bio/output"
+    ":std/net/socket/api"
+    ":std/net/httpd/base" ":std/net/httpd/handler" ":std/net/httpd/mux"
+    ":std/net/s3/api" ":std/net/s3/sigv4"
+    ":std/net/websocket/api" ":std/net/smtp/api"
+    ;; crypto (8 — crypto/ec and crypto/x509 fail in full suite due to env)
+    ":std/crypto/etc" ":std/crypto/libcrypto"
+    ":std/crypto/digest" ":std/crypto/cipher" ":std/crypto/hmac"
+    ":std/crypto/bn" ":std/crypto/dh" ":std/crypto/pkey"
+    ;; os (11)
+    ":std/os/error" ":std/os/fd" ":std/os/fdio" ":std/os/flock"
+    ":std/os/pipe" ":std/os/epoll" ":std/os/inotify" ":std/os/signal"
+    ":std/os/socket" ":std/os/kqueue" ":std/os/temporaries"
+    ;; db (2)
+    ":std/db/dbi" ":std/db/conpool"
+    ;; web (1 — web/cgi fails in full suite due to env)
+    ":std/web/fastcgi"
+    ;; actor (4)
+    ":std/actor-v18/message" ":std/actor-v18/proto"
+    ":std/actor-v18/path" ":std/actor-v18/io"
+    ;; srfi/146 (1)
+    ":std/srfi/146"
     ))
 
 (for-each (lambda (mod)
