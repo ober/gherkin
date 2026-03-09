@@ -3000,14 +3000,14 @@
     :gerbil/compiler/optimize :gerbil/compiler/driver
     :gerbil/compiler/method :gerbil/compiler/ssxi))
 
-;; Batch 2: std/misc (38)
+;; Batch 2: std/misc (39)
 (run-module-batch "std-misc"
   '(:std/misc/queue :std/misc/deque :std/misc/pqueue
     :std/misc/shuffle :std/misc/atom :std/misc/walist
     :std/misc/lru :std/misc/repr :std/misc/path
     :std/misc/list :std/misc/hash :std/misc/string
     :std/misc/ports :std/misc/number :std/misc/bytes
-    :std/misc/func :std/misc/uuid
+    :std/misc/func :std/misc/uuid :std/misc/prime
     :std/misc/symbol :std/misc/alist :std/misc/plist
     :std/misc/list-builder :std/misc/completion
     :std/misc/vector :std/misc/evector :std/misc/dag
@@ -3126,7 +3126,7 @@
     :std/crypto/ec :std/crypto/x509
     :std/os/fcntl
     :std/web/cgi
-    :std/db/sqlite :std/db/postgresql))
+    :std/db/sqlite :std/db/postgresql :std/db/postgresql-driver))
 
 ;; Batch 8: io/strio/socket extended + net/httpd/smtp/ssl/websocket (55)
 (run-module-batch "std-io-net-ext"
@@ -3149,7 +3149,8 @@
     :std/net/socket/basic-socket :std/net/socket/buffer
     :std/net/socket/epoll-server :std/net/socket/kqueue-server :std/net/socket/server
     :std/net/socks :std/net/socks/api :std/net/socks/interface :std/net/socks/server
-    :std/net/uri))
+    :std/net/socks/client
+    :std/net/uri :std/net/repl :std/net/sasl))
 
 ;; Batch 9: ssl/websocket + crypto/db/srfi/protobuf/actor extended (51)
 (run-module-batch "std-remaining"
@@ -3160,7 +3161,6 @@
     :std/os/hostname :std/os/pid :std/os/signal-handler :std/os/signalfd
     :std/crypto :std/crypto/kdf
     :std/protobuf/macros :std/protobuf/proto
-    ;; :std/db/postgresql-driver — fails in batch (dep issue)
     :std/srfi/146/hamt :std/srfi/146/hamt-map :std/srfi/146/hamt-misc
     :std/srfi/146/hash :std/srfi/146/vector-edit
     :std/text/zlib :std/text/json/json-benchmark
