@@ -2585,6 +2585,30 @@
   (let ([decoded (eval '(hex-decode "68656c6c6f"))])
     (check "hex decode (loader)" (equal? (utf8->string decoded) "hello"))))
 
+;; alist — plist conversion
+(guard (exn [#t
+  (printf "  G.2b alist error: ~a~n" (if (message-condition? exn) (condition-message exn) exn))
+  (check "alist plist->alist" #f)])
+  (eval '(gerbil-load-module ':std/misc/alist))
+  (check "alist plist->alist"
+    (equal? (eval '(plist->alist (list 'a 1 'b 2))) '((a . 1) (b . 2)))))
+
+;; bytes — integer/bytevector conversion
+(guard (exn [#t
+  (printf "  G.2b bytes error: ~a~n" (if (message-condition? exn) (condition-message exn) exn))
+  (check "bytes u8vector->uint" #f)])
+  (eval '(gerbil-load-module ':std/misc/bytes))
+  (check "bytes u8vector->uint"
+    (= (eval '(u8vector->uint (u8vector 1 0))) 256)))
+
+;; func — compose
+(guard (exn [#t
+  (printf "  G.2b func error: ~a~n" (if (message-condition? exn) (condition-message exn) exn))
+  (check "func compose" #f)])
+  (eval '(gerbil-load-module ':std/misc/func))
+  (check "func compose"
+    (= (eval '((compose car cdr) (list 1 2 3))) 2)))
+
 ;; G.3: Import misc modules
 (printf "~n--- G.3: Misc modules ---~n")
 
