@@ -480,6 +480,13 @@
                                   (apply assertion-violation 'gerbil
                                     (string-append "bad argument — expected " expectation)
                                     irritants)))
+        ;; SRFI-1 primitives (Gambit has these built-in, Chez does not)
+        ;; These are declared as (extern namespace: #f fold fold-right) in SRFI-1
+        (fold . ,fold-left)
+        (fold-right . ,fold-right)
+        (reduce . ,(lambda (f ridentity lis)
+                     (if (null? lis) ridentity
+                       (fold-left f (car lis) (cdr lis)))))
         ;; Pregexp (Gerbil uses gambit's pregexp which is loaded via the module)
         ;; These will be overridden when :std/pregexp loads, but we need stubs
         ;; so modules that reference them during compilation don't fail
