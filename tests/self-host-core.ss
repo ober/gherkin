@@ -2730,9 +2730,37 @@
 (define gerbil-dir-i3 (string-append (getenv "HOME") "/mine/gerbil/src/"))
 (gerbil-module-init! gerbil-dir-i3)
 
-;; 201 Gerbil std modules compile and load on Chez via gherkin.
+;; 243 Gerbil modules compile and load on Chez via gherkin:
+;; 14 runtime + 9 expander + 10 core + 12 compiler + 198 std
 (define loader-test-modules
-  '(;; misc (26)
+  '(;; Gerbil runtime (14)
+    ":gerbil/runtime/gambit" ":gerbil/runtime/util"
+    ":gerbil/runtime/table" ":gerbil/runtime/hash"
+    ":gerbil/runtime/mop" ":gerbil/runtime/error"
+    ":gerbil/runtime/thread" ":gerbil/runtime/syntax"
+    ":gerbil/runtime/eval" ":gerbil/runtime/control"
+    ":gerbil/runtime/c3" ":gerbil/runtime/system"
+    ":gerbil/runtime/loader" ":gerbil/runtime/init"
+    ;; Gerbil expander (9)
+    ":gerbil/expander/common" ":gerbil/expander/stx"
+    ":gerbil/expander/core" ":gerbil/expander/top"
+    ":gerbil/expander/module" ":gerbil/expander/compile"
+    ":gerbil/expander/root" ":gerbil/expander/stxcase"
+    ":gerbil/expander"
+    ;; Gerbil core macros (10)
+    ":gerbil/core/runtime" ":gerbil/core/sugar"
+    ":gerbil/core/mop" ":gerbil/core/match"
+    ":gerbil/core/more-sugar" ":gerbil/core/more-syntax-sugar"
+    ":gerbil/core/module-sugar" ":gerbil/core/contract"
+    ":gerbil/core/macro-object" ":gerbil/core"
+    ;; Gerbil compiler (12)
+    ":gerbil/compiler/base" ":gerbil/compiler/compile"
+    ":gerbil/compiler/optimize-base" ":gerbil/compiler/optimize-xform"
+    ":gerbil/compiler/optimize-top" ":gerbil/compiler/optimize-call"
+    ":gerbil/compiler/optimize-spec" ":gerbil/compiler/optimize-ann"
+    ":gerbil/compiler/optimize" ":gerbil/compiler/driver"
+    ":gerbil/compiler/method" ":gerbil/compiler/ssxi"
+    ;; misc (26)
     ":std/misc/queue" ":std/misc/deque" ":std/misc/pqueue"
     ":std/misc/shuffle" ":std/misc/atom" ":std/misc/walist"
     ":std/misc/lru" ":std/misc/repr" ":std/misc/path"
