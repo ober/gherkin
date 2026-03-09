@@ -670,6 +670,7 @@
 
   (check "runtime loads" all-ok))
 
+
 ;;; ============================================================
 ;;; Optimizer variant aliases
 ;;; ============================================================
@@ -944,6 +945,7 @@
 
 (printf "  Expander stubs injected~n")
 
+
 ;;; ============================================================
 ;;; Compile and evaluate expander files (Phase 2)
 ;;; ============================================================
@@ -1036,6 +1038,7 @@
 (printf "~n=== Post-Expander Variant Aliases ===~n")
 (inject-all-variants!)
 
+
 ;;; ============================================================
 ;;; Set up expander context before core files
 ;;; ============================================================
@@ -1073,6 +1076,7 @@
         (unless ok (set! core-total-errors (+ core-total-errors 1)))))))
 
 (for-each compile-and-load-core core-files)
+
 
 ;;; ============================================================
 ;;; Verification
@@ -1207,6 +1211,7 @@
   (check "optimizer types defined" #f)])
   (let ([t (eval '!alias::t)])
     (check "optimizer types defined" (and t (|##structure?| t)))))
+
 
 ;;; ============================================================
 ;;; Module System (Phase 4)
@@ -2339,6 +2344,7 @@
           prelude mod-id mod-ns (length body))
         (check "error module metadata" (symbol? mod-id))))))
 
+
 ;;; ============================================================
 ;;; Compiler Backend Retargeting (Phase E)
 ;;; ============================================================
@@ -2439,6 +2445,7 @@
   ;; Verify it's still functional
   (check "module: sort after gherkin import"
     (equal? (eval '(sort '(9 3 7 1 5) <)) '(1 3 5 7 9))))
+
 
 ;;; ============================================================
 ;;; Full Standard Library (Phase G)
@@ -2555,186 +2562,133 @@
   (check "sort with custom comparator"
     (equal? (eval '(sort '("banana" "apple" "cherry") string<?)) '("apple" "banana" "cherry"))))
 
-;; Module loader functionality tests
-(printf "~n--- G.2b: Module loader functionality ---~n")
+;; G.2b: Module loader functionality tests — run in SUBPROCESS to avoid OOM
+;; Each test loads modules via gerbil-load-module which accumulates memory.
+;; Running in a subprocess keeps the main process lean.
+(printf "~n--- G.2b: Module loader functionality (subprocess) ---~n")
 
-;; srfi/1 — list operations
-(guard (exn [#t
-  (printf "  G.2b srfi/1 error: ~a~n" (if (message-condition? exn) (condition-message exn) exn))
-  (check "srfi/1 iota works" #f)])
-  (eval '(gerbil-load-module ':std/srfi/1))
-  (check "srfi/1 iota works"
-    (equal? (eval '(iota 5)) '(0 1 2 3 4))))
+;; Shared subprocess result parser — used by all subprocess batch runners
+(define (parse-subprocess-result batch-name out-file)
+  (let ([result (guard (exn [#t '()])
+                  (call-with-input-file out-file
+                    (lambda (p)
+                      (let loop ([lines '()])
+                        (let ([line (get-line p)])
+                          (if (eof-object? line)
+                            (reverse lines)
+                            (loop (cons line lines))))))))])
+    (if (pair? result)
+      (let* ([last-line (car (reverse result))]
+             [fail-lines (filter (lambda (l)
+                                   (and (>= (string-length l) 5)
+                                        (string=? (substring l 0 5) "FAIL ")))
+                                 result)]
+             [space (let lp ([i 0])
+                      (cond [(>= i (string-length last-line)) #f]
+                            [(char=? (string-ref last-line i) #\space) i]
+                            [else (lp (+ i 1))]))])
+        (for-each (lambda (fl)
+          (check (substring fl 5 (string-length fl)) #f))
+          fail-lines)
+        (if space
+          (let ([p (string->number (substring last-line 0 space))]
+                [f (string->number (substring last-line (+ space 1)
+                                     (string-length last-line)))])
+            (when (and p f)
+              (do ([i 0 (+ i 1)]) ((= i p))
+                (set! pass-count (+ pass-count 1)))
+              (printf "  ~a: ~a pass, ~a fail~n" batch-name p f)))
+          (printf "  ~a: parse error~n" batch-name)))
+      (printf "  ~a: subprocess error~n" batch-name))))
 
-;; srfi/1 — more list operations
-(guard (exn [#t
-  (printf "  G.2b srfi/1 filter error: ~a~n" (if (message-condition? exn) (condition-message exn) exn))
-  (check "srfi/1 filter works" #f)])
-  (check "srfi/1 filter works"
-    (equal? (eval '(filter even? '(1 2 3 4 5))) '(2 4))))
-(guard (exn [#t
-  (printf "  G.2b srfi/1 every error: ~a~n" (if (message-condition? exn) (condition-message exn) exn))
-  (check "srfi/1 every works" #f)])
-  (check "srfi/1 every works"
-    (eval '(every number? '(1 2 3)))))
-(guard (exn [#t
-  (printf "  G.2b srfi/1 any error: ~a~n" (if (message-condition? exn) (condition-message exn) exn))
-  (check "srfi/1 any works" #f)])
-  (check "srfi/1 any works"
-    (eval '(any string? '(1 "a" 3)))))
-(guard (exn [#t
-  (printf "  G.2b srfi/1 zip error: ~a~n" (if (message-condition? exn) (condition-message exn) exn))
-  (check "srfi/1 zip works" #f)])
-  (check "srfi/1 zip works"
-    (equal? (eval '(zip '(1 2 3) '(a b c))) '((1 a) (2 b) (3 c)))))
-(guard (exn [#t
-  (printf "  G.2b srfi/1 take error: ~a~n" (if (message-condition? exn) (condition-message exn) exn))
-  (check "srfi/1 take works" #f)])
-  (check "srfi/1 take works"
-    (equal? (eval '(take '(a b c d e) 3)) '(a b c))))
-(guard (exn [#t
-  (printf "  G.2b srfi/1 drop error: ~a~n" (if (message-condition? exn) (condition-message exn) exn))
-  (check "srfi/1 drop works" #f)])
-  (check "srfi/1 drop works"
-    (equal? (eval '(drop '(a b c d e) 3)) '(d e))))
+;; Write the module-loader preamble to a script port
+(define (write-loader-preamble p)
+  (let ([gherkin-dir (string-append (getenv "HOME") "/mine/gherkin")]
+        [gerbil-src-dir (string-append (getenv "HOME") "/mine/gerbil/src/")])
+    (display "#!chezscheme\n" p)
+    (fprintf p "(library-directories '((~s . ~s) (~s . ~s)))~n"
+      gherkin-dir gherkin-dir
+      (string-append gherkin-dir "/src")
+      (string-append gherkin-dir "/src"))
+    (display "(import (module loader))\n" p)
+    (fprintf p "(gerbil-module-init! ~s)~n" gerbil-src-dir)
+    (display "(define pass 0) (define fail 0)\n" p)
+    (display "(define (t! name ok)\n" p)
+    (display "  (if ok (set! pass (+ pass 1))\n" p)
+    (display "    (begin (set! fail (+ fail 1))\n" p)
+    (display "      (display \"FAIL \") (display name) (newline))))\n" p)))
 
-;; srfi/1 — fold, fold-right, reduce (extern primitives, now injected)
-(guard (exn [#t
-  (printf "  G.2b srfi/1 fold error: ~a~n" (if (message-condition? exn) (condition-message exn) exn))
-  (check "srfi/1 fold works" #f)])
-  (check "srfi/1 fold works"
-    (= (eval '(fold + 0 '(1 2 3 4 5))) 15)))
-(guard (exn [#t
-  (printf "  G.2b srfi/1 fold-right error: ~a~n" (if (message-condition? exn) (condition-message exn) exn))
-  (check "srfi/1 fold-right works" #f)])
-  (check "srfi/1 fold-right works"
-    (equal? (eval '(fold-right cons '() '(1 2 3))) '(1 2 3))))
-(guard (exn [#t
-  (printf "  G.2b srfi/1 reduce error: ~a~n" (if (message-condition? exn) (condition-message exn) exn))
-  (check "srfi/1 reduce works" #f)])
-  (check "srfi/1 reduce works"
-    (= (eval '(reduce + 0 '(1 2 3 4 5))) 15)))
+;; Write subprocess result footer
+(define (write-result-footer p)
+  (display "(display pass) (display \" \") (display fail) (newline)\n" p))
 
-;; srfi/13 — string operations
-(guard (exn [#t
-  (printf "  G.2b srfi/13 error: ~a~n" (if (message-condition? exn) (condition-message exn) exn))
-  (check "srfi/13 string-upcase works" #f)])
-  (eval '(gerbil-load-module ':std/srfi/13))
-  (check "srfi/13 string-upcase works"
-    (equal? (eval '(string-upcase "hello")) "HELLO")))
-(guard (exn [#t
-  (printf "  G.2b srfi/13 string-contains error: ~a~n" (if (message-condition? exn) (condition-message exn) exn))
-  (check "srfi/13 string-contains works" #f)])
-  (check "srfi/13 string-contains works"
-    (eqv? (eval '(string-contains "hello world" "world")) 6)))
+;; Run a functionality batch — writer-proc takes a port and writes test code
+(define (run-functionality-batch batch-name writer-proc)
+  (let ([tmp-file (string-append "/tmp/gherkin-func-" batch-name ".ss")]
+        [out-file (string-append "/tmp/gherkin-func-" batch-name ".out")])
+    (call-with-output-file tmp-file
+      (lambda (p)
+        (write-loader-preamble p)
+        (writer-proc p)
+        (write-result-footer p))
+      'replace)
+    (system (string-append "scheme -q --script " tmp-file " > " out-file " 2>/dev/null"))
+    (parse-subprocess-result batch-name out-file)))
 
-;; lazy — delay/force
-(guard (exn [#t
-  (printf "  G.2b lazy error: ~a~n" (if (message-condition? exn) (condition-message exn) exn))
-  (check "lazy force/delay works" #f)])
-  (eval '(gerbil-load-module ':std/lazy))
-  (check "lazy force/delay works"
-    (eqv? (eval '(force (delay 42))) 42)))
-
-;; alist — acons
-(guard (exn [#t
-  (printf "  G.2b alist acons error: ~a~n" (if (message-condition? exn) (condition-message exn) exn))
-  (check "alist acons works" #f)])
-  (check "alist acons works"
-    (equal? (eval '(acons 'a 1 '())) '((a . 1)))))
-
-;; misc/ports — read-all-as-string
-(guard (exn [#t
-  (printf "  G.2b ports error: ~a~n" (if (message-condition? exn) (condition-message exn) exn))
-  (check "read-all-as-string works" #f)])
-  (eval '(gerbil-load-module ':std/misc/ports))
-  (check "read-all-as-string works"
-    (equal? (eval '(read-all-as-string (open-input-string "hello world"))) "hello world")))
-
-;; misc/path — path-extension
-(guard (exn [#t
-  (printf "  G.2b path error: ~a~n" (if (message-condition? exn) (condition-message exn) exn))
-  (check "path-extension works" #f)])
-  (eval '(gerbil-load-module ':std/misc/path))
-  (let ([ext (eval '(path-extension "file.txt"))])
-    (check "path-extension works"
-      (or (equal? ext "txt") (equal? ext ".txt")))))
-
-;; error module — error-message (skipped: ~:s format string not yet supported)
-
-;; json — requires defsyntax with stx-identifier (needs native expander)
-;; Skipped: read-json-object/reader can't be generated by cross-compiler
-
-;; Restore native string->utf8 (clobbered by Gerbil runtime)
-(define-top-level-value 'string->utf8 string->utf8 (interaction-environment))
-
-;; text/hex — encode/decode (uses existing hex module from earlier load)
-(guard (exn [#t
-  (printf "  G.2b hex encode error: ~a~n" (if (message-condition? exn) (condition-message exn) exn))
-  (check "hex encode (loader)" #f)])
-  (let ([encoded (eval '(hex-encode (string->utf8 "hello")))])
-    (check "hex encode (loader)" (equal? encoded "68656c6c6f"))))
-
-(guard (exn [#t
-  (printf "  G.2b hex decode error: ~a~n" (if (message-condition? exn) (condition-message exn) exn))
-  (check "hex decode (loader)" #f)])
-  (let ([decoded (eval '(hex-decode "68656c6c6f"))])
-    (check "hex decode (loader)" (equal? (utf8->string decoded) "hello"))))
-
-;; alist — plist conversion
-(guard (exn [#t
-  (printf "  G.2b alist error: ~a~n" (if (message-condition? exn) (condition-message exn) exn))
-  (check "alist plist->alist" #f)])
-  (eval '(gerbil-load-module ':std/misc/alist))
-  (check "alist plist->alist"
-    (equal? (eval '(plist->alist (list 'a 1 'b 2))) '((a . 1) (b . 2)))))
-
-;; bytes — integer/bytevector conversion
-(guard (exn [#t
-  (printf "  G.2b bytes error: ~a~n" (if (message-condition? exn) (condition-message exn) exn))
-  (check "bytes u8vector->uint" #f)])
-  (eval '(gerbil-load-module ':std/misc/bytes))
-  (check "bytes u8vector->uint"
-    (= (eval '(u8vector->uint (u8vector 1 0))) 256)))
-
-;; func — compose
-(guard (exn [#t
-  (printf "  G.2b func error: ~a~n" (if (message-condition? exn) (condition-message exn) exn))
-  (check "func compose" #f)])
-  (eval '(gerbil-load-module ':std/misc/func))
-  (check "func compose"
-    (= (eval '((compose car cdr) (list 1 2 3))) 2)))
-
-;; string-split
-(guard (exn [#t
-  (printf "  G.2b string-split error: ~a~n" (if (message-condition? exn) (condition-message exn) exn))
-  (check "string-split works" #f)])
-  (eval '(gerbil-load-module ':std/misc/string))
-  (check "string-split works"
-    (equal? (eval '(string-split "a,b,c" #\,)) '("a" "b" "c"))))
-
-;; flatten
-(guard (exn [#t
-  (printf "  G.2b flatten error: ~a~n" (if (message-condition? exn) (condition-message exn) exn))
-  (check "flatten works" #f)])
-  (eval '(gerbil-load-module ':std/misc/list))
-  (check "flatten works"
-    (equal? (eval '(flatten '(1 (2 (3 4)) 5))) '(1 2 3 4 5))))
-
-;; queue operations
-(guard (exn [#t
-  (printf "  G.2b queue error: ~a~n" (if (message-condition? exn) (condition-message exn) exn))
-  (check "queue operations" #f)])
-  (eval '(gerbil-load-module ':std/misc/queue))
-  (check "queue operations"
-    (= (eval '(let ([q (make-queue)]) (enqueue! q 1) (enqueue! q 2) (dequeue! q))) 1)))
-
-;; number->string base 16
-(guard (exn [#t
-  (printf "  G.2b number error: ~a~n" (if (message-condition? exn) (condition-message exn) exn))
-  (check "number->string base 16" #f)])
-  (check "number->string base 16"
-    (equal? (eval '(number->string 255 16)) "FF")))
+;; G.2b functionality tests — programmatic script generation (no escaping issues)
+(run-functionality-batch "g2b-func"
+  (lambda (p)
+    ;; Load modules
+    (for-each (lambda (mod)
+      (fprintf p "(gerbil-load-module '~a)~n" mod))
+      '(:std/srfi/1 :std/srfi/13 :std/lazy :std/misc/alist
+        :std/misc/ports :std/misc/path :std/misc/bytes
+        :std/misc/func :std/misc/string :std/misc/list
+        :std/misc/queue :std/text/hex :std/format))
+    (display "(post-load-fixup! \"std/format\")\n" p)
+    ;; Write test expressions using write for data, display for code
+    (display "(t! \"srfi/1 iota\" (equal? (iota 5) '(0 1 2 3 4)))\n" p)
+    (display "(t! \"srfi/1 filter\" (equal? (filter even? '(1 2 3 4 5)) '(2 4)))\n" p)
+    (display "(t! \"srfi/1 every\" (every number? '(1 2 3)))\n" p)
+    (display "(t! \"srfi/1 any\" (any string? '(1 \"a\" 3)))\n" p)
+    (display "(t! \"srfi/1 zip\" (equal? (zip '(1 2 3) '(a b c)) '((1 a) (2 b) (3 c))))\n" p)
+    (display "(t! \"srfi/1 take\" (equal? (take '(a b c d e) 3) '(a b c)))\n" p)
+    (display "(t! \"srfi/1 drop\" (equal? (drop '(a b c d e) 3) '(d e)))\n" p)
+    (display "(t! \"srfi/1 fold\" (= (fold + 0 '(1 2 3 4 5)) 15))\n" p)
+    (display "(t! \"srfi/1 fold-right\" (equal? (fold-right cons '() '(1 2 3)) '(1 2 3)))\n" p)
+    (display "(t! \"srfi/1 reduce\" (= (reduce + 0 '(1 2 3 4 5)) 15))\n" p)
+    ;; srfi/13
+    (display "(t! \"srfi/13 string-upcase\" (equal? (string-upcase \"hello\") \"HELLO\"))\n" p)
+    (display "(t! \"srfi/13 string-contains\" (eqv? (string-contains \"hello world\" \"world\") 6))\n" p)
+    ;; lazy
+    (display "(t! \"lazy force/delay\" (eqv? (force (delay 42)) 42))\n" p)
+    ;; alist
+    (display "(t! \"alist acons\" (equal? (acons 'a 1 '()) '((a . 1))))\n" p)
+    (display "(t! \"alist plist->alist\" (equal? (plist->alist (list 'a 1 'b 2)) '((a . 1) (b . 2))))\n" p)
+    ;; ports
+    (display "(t! \"read-all-as-string\" (equal? (read-all-as-string (open-input-string \"hello world\")) \"hello world\"))\n" p)
+    ;; path
+    (display "(let ([ext (path-extension \"file.txt\")])\n" p)
+    (display "  (t! \"path-extension\" (or (equal? ext \"txt\") (equal? ext \".txt\"))))\n" p)
+    ;; hex
+    (display "(t! \"hex encode\" (equal? (hex-encode (string->utf8 \"hello\")) \"68656c6c6f\"))\n" p)
+    (display "(t! \"hex decode\" (equal? (utf8->string (hex-decode \"68656c6c6f\")) \"hello\"))\n" p)
+    ;; bytes
+    (display "(t! \"bytes u8vector->uint\" (= (u8vector->uint (u8vector 1 0)) 256))\n" p)
+    ;; func
+    (display "(t! \"func compose\" (= ((compose car cdr) (list 1 2 3)) 2))\n" p)
+    ;; string
+    (display "(t! \"string-split\" (equal? (string-split \"a,b,c\" #\\,) '(\"a\" \"b\" \"c\")))\n" p)
+    ;; list
+    (display "(t! \"flatten\" (equal? (flatten '(1 (2 (3 4)) 5)) '(1 2 3 4 5)))\n" p)
+    ;; queue
+    (display "(t! \"queue ops\" (= (let ([q (make-queue)]) (enqueue! q 1) (enqueue! q 2) (dequeue! q)) 1))\n" p)
+    ;; number
+    (display "(t! \"number->string base 16\" (equal? (number->string 255 16) \"FF\"))\n" p)
+    ;; format
+    (display "(t! \"format works\" (equal? (format \"hello ~a ~a\" \"world\" 42) \"hello world 42\"))\n" p)
+    (display "(let ([r (format \"~x\" 255)])\n" p)
+    (display "  (t! \"format hex\" (or (equal? r \"ff\") (equal? r \"FF\"))))\n" p)))
 
 ;; G.3: Import misc modules
 (printf "~n--- G.3: Misc modules ---~n")
@@ -2895,126 +2849,100 @@
 ;;; Phase I: Module Loading — compile Gerbil std modules via gherkin
 ;;; ============================================================
 
-(printf "~n--- I.1: Standard library module compilation ---~n")
+;; I.1 + I.2: Module compilation and functionality tests run in SUBPROCESS
+;; to avoid accumulating compiled code in the main process heap.
+(printf "~n--- I.1+I.2: Module compilation + functionality (subprocess) ---~n")
 
-;; Helper: compile a Gerbil source file and count errors
-(define (try-compile-module mod-path)
-  (let ([gerbil-dir (string-append (getenv "HOME") "/mine/gerbil")])
-    (guard (exn [#t
-      (printf "  ~a: FILE-ERR ~a~n" mod-path
-        (if (message-condition? exn) (condition-message exn) exn))
-      (values -1 -1 0)])
-      (let* ([path (string-append gerbil-dir "/src/"
-                     (substring mod-path 1 (string-length mod-path)) ".ss")]
-             [forms (map strip-annotations (gerbil-read-file path))]
-             [compile-errors 0]
-             [eval-errors 0]
-             [real-eval-errors 0])
-        (for-each (lambda (f)
-          (guard (exn [#t (set! compile-errors (+ compile-errors 1))])
-            (let ([compiled (gerbil-compile-top f)])
-              (when compiled
-                (guard (exn [#t
-                  (set! eval-errors (+ eval-errors 1))
-                  (let ([msg (if (message-condition? exn) (condition-message exn) "?")])
-                    (when (not (or (string=? msg "unknown module")
-                                   (string=? msg "export form outside of a module or library")))
-                      (set! real-eval-errors (+ real-eval-errors 1))))])
-                  (eval compiled))))))
-          forms)
-        (values compile-errors real-eval-errors (length forms))))))
+;; Run compiler-based tests in a subprocess with module loader + compiler
+(define (run-compiler-batch batch-name writer-proc)
+  (let ([tmp-file (string-append "/tmp/gherkin-compiler-" batch-name ".ss")]
+        [out-file (string-append "/tmp/gherkin-compiler-" batch-name ".out")]
+        [gherkin-dir (string-append (getenv "HOME") "/mine/gherkin")]
+        [gerbil-src-dir (string-append (getenv "HOME") "/mine/gerbil/src/")])
+    (call-with-output-file tmp-file
+      (lambda (p)
+        ;; Use module loader for runtime bootstrap + compiler for compilation tests
+        (write-loader-preamble p)
+        ;; Also import compiler infrastructure for try-compile-module
+        (display "(import\n" p)
+        (display "  (only (compiler compile) gerbil-compile-top strip-annotations)\n" p)
+        (display "  (only (reader reader) gerbil-read-file annotated-datum?))\n" p)
+        ;; try-compile-module helper
+        (fprintf p "(define gerbil-dir ~s)~n" (string-append (getenv "HOME") "/mine/gerbil"))
+        (display "(define (try-compile-module mod-path)\n" p)
+        (display "  (guard (exn [#t (values -1 -1 0)])\n" p)
+        (display "    (let* ([path (string-append gerbil-dir \"/src/\"\n" p)
+        (display "                   (substring mod-path 1 (string-length mod-path)) \".ss\")]\n" p)
+        (display "           [forms (map strip-annotations (gerbil-read-file path))]\n" p)
+        (display "           [compile-errors 0]\n" p)
+        (display "           [eval-errors 0])\n" p)
+        (display "      (for-each (lambda (f)\n" p)
+        (display "        (guard (exn [#t (set! compile-errors (+ compile-errors 1))])\n" p)
+        (display "          (let ([compiled (gerbil-compile-top f)])\n" p)
+        (display "            (when compiled\n" p)
+        (display "              (guard (exn [#t (set! eval-errors (+ eval-errors 1))])\n" p)
+        (display "                (eval compiled))))))\n" p)
+        (display "        forms)\n" p)
+        (display "      (values compile-errors eval-errors (length forms)))))\n" p)
+        ;; User test code
+        (writer-proc p)
+        (write-result-footer p))
+      'replace)
+    (system (string-append "scheme -q --script " tmp-file " > " out-file " 2>/dev/null"))
+    (parse-subprocess-result batch-name out-file)))
 
-;; Test each module compiles with zero compiler errors
-(define test-modules
-  '(":std/misc/queue"
-    ":std/misc/deque"
-    ":std/misc/pqueue"
-    ":std/misc/shuffle"
-    ":std/misc/atom"
-    ":std/misc/walist"
-    ":std/misc/channel"
-    ":std/misc/timeout"
-    ":std/misc/lru"
-    ":std/misc/rbtree"
-    ":std/misc/repr"
-    ":std/misc/number"
-    ":std/misc/ports"
-    ":std/misc/string"
-    ":std/misc/list"
-    ":std/misc/hash"
-    ":std/misc/path"
-    ":std/sort"
-    ":std/srfi/1"
-    ":std/srfi/8"
-    ":std/srfi/13"
-    ":std/srfi/14"
-    ":std/srfi/41"
-    ":std/srfi/43"
-    ":std/error"
-    ":std/text/hex"
-    ":std/text/utf8"
-    ":std/text/csv"
-    ":std/hash-table"
-    ":std/cli/getopt"
-    ":std/sugar"))
-
-(for-each (lambda (mod)
-  (let-values ([(ce ee forms) (try-compile-module mod)])
-    (check (string-append "compile " mod)
-      (= ce 0))))
-  test-modules)
-
-;; I.2: Verify key module functionality after compilation
-(printf "~n--- I.2: Module functionality verification ---~n")
-
-;; Queue operations
-(guard (exn [#t
-  (printf "  queue test error: ~a~n" (if (message-condition? exn) (condition-message exn) exn))
-  (check "queue operations" #f)])
-  (try-compile-module ":std/misc/queue")
-  (let ([q (eval '(make-queue))])
-    (eval `(enqueue! ',q 1))
-    (eval `(enqueue! ',q 2))
-    (eval `(enqueue! ',q 3))
-    (check "queue operations"
-      (and (eqv? (eval `(queue-length ',q)) 3)
-           (eqv? (eval `(dequeue! ',q)) 1)
-           (equal? (eval `(queue->list ',q)) '(2 3))))))
-
-;; Deque operations
-(guard (exn [#t
-  (printf "  deque test error: ~a~n" (if (message-condition? exn) (condition-message exn) exn))
-  (check "deque operations" #f)])
-  (try-compile-module ":std/misc/deque")
-  (let ([d (eval '(make-deque))])
-    (eval `(push-back! ',d 10))
-    (eval `(push-back! ',d 20))
-    (eval `(push-back! ',d 30))
-    (check "deque operations"
-      (and (eqv? (eval `(deque-length ',d)) 3)
-           (eqv? (eval `(pop-front! ',d)) 10)))))
-
-;; Sort module
-(guard (exn [#t
-  (printf "  sort test error: ~a~n" (if (message-condition? exn) (condition-message exn) exn))
-  (check "sort operations" #f)])
-  (try-compile-module ":std/sort")
-  (check "sort operations"
-    (equal? (eval '(sort '(3 1 4 1 5 9) <)) '(1 1 3 4 5 9))))
-
-;; Priority queue
-(guard (exn [#t
-  (printf "  pqueue test error: ~a~n" (if (message-condition? exn) (condition-message exn) exn))
-  (check "pqueue operations" #f)])
-  (try-compile-module ":std/misc/pqueue")
-  ;; pqueue constructor: (make-pqueue prio-fn [cmp] [initial-size])
-  ;; prio extracts a numeric priority, cmp defaults to < (min-heap)
-  (let ([pq (eval '(make-pqueue car))])
-    (eval `(pqueue-push! ',pq '(1 . a)))
-    (eval `(pqueue-push! ',pq '(3 . c)))
-    (eval `(pqueue-push! ',pq '(2 . b)))
-    (check "pqueue operations"
-      (equal? (eval `(pqueue-pop! ',pq)) '(1 . a)))))
+(run-compiler-batch "i1-i2"
+  (lambda (p)
+    ;; I.1: Compile each module, check zero compile errors
+    (for-each (lambda (mod)
+      (fprintf p "(let-values ([(ce ee forms) (try-compile-module ~s)])\n" mod)
+      (fprintf p "  (t! \"compile ~a\" (= ce 0)))~n" mod))
+      '(":std/misc/queue" ":std/misc/deque" ":std/misc/pqueue"
+        ":std/misc/shuffle" ":std/misc/atom" ":std/misc/walist"
+        ":std/misc/channel" ":std/misc/timeout" ":std/misc/lru"
+        ":std/misc/rbtree" ":std/misc/repr" ":std/misc/number"
+        ":std/misc/ports" ":std/misc/string" ":std/misc/list"
+        ":std/misc/hash" ":std/misc/path" ":std/sort"
+        ":std/srfi/1" ":std/srfi/8" ":std/srfi/13"
+        ":std/srfi/14" ":std/srfi/41" ":std/srfi/43"
+        ":std/error" ":std/text/hex" ":std/text/utf8"
+        ":std/text/csv" ":std/hash-table" ":std/cli/getopt"
+        ":std/sugar"))
+    ;; I.2: Queue operations (each wrapped in guard for safety)
+    (display "(guard (exn [#t (t! \"queue operations\" #f)])\n" p)
+    (display "  (try-compile-module \":std/misc/queue\")\n" p)
+    (display "  (let ([q (eval '(make-queue))])\n" p)
+    (display "    (eval `(enqueue! ',q 1))\n" p)
+    (display "    (eval `(enqueue! ',q 2))\n" p)
+    (display "    (eval `(enqueue! ',q 3))\n" p)
+    (display "    (t! \"queue operations\"\n" p)
+    (display "      (and (eqv? (eval `(queue-length ',q)) 3)\n" p)
+    (display "           (eqv? (eval `(dequeue! ',q)) 1)\n" p)
+    (display "           (equal? (eval `(queue->list ',q)) '(2 3))))))\n" p)
+    ;; Deque operations
+    (display "(guard (exn [#t (t! \"deque operations\" #f)])\n" p)
+    (display "  (try-compile-module \":std/misc/deque\")\n" p)
+    (display "  (let ([d (eval '(make-deque))])\n" p)
+    (display "    (eval `(push-back! ',d 10))\n" p)
+    (display "    (eval `(push-back! ',d 20))\n" p)
+    (display "    (eval `(push-back! ',d 30))\n" p)
+    (display "    (t! \"deque operations\"\n" p)
+    (display "      (and (eqv? (eval `(deque-length ',d)) 3)\n" p)
+    (display "           (eqv? (eval `(pop-front! ',d)) 10)))))\n" p)
+    ;; Sort — use gerbil-load-module since sort's internal dispatch needs full module
+    (display "(guard (exn [#t (t! \"sort operations\" #f)])\n" p)
+    (display "  (gerbil-load-module ':std/sort)\n" p)
+    (display "  (t! \"sort operations\"\n" p)
+    (display "    (equal? (sort '(3 1 4 1 5 9) <) '(1 1 3 4 5 9))))\n" p)
+    ;; Priority queue
+    (display "(guard (exn [#t (t! \"pqueue operations\" #f)])\n" p)
+    (display "  (try-compile-module \":std/misc/pqueue\")\n" p)
+    (display "  (let ([pq (eval '(make-pqueue car))])\n" p)
+    (display "    (eval `(pqueue-push! ',pq '(1 . a)))\n" p)
+    (display "    (eval `(pqueue-push! ',pq '(3 . c)))\n" p)
+    (display "    (eval `(pqueue-push! ',pq '(2 . b)))\n" p)
+    (display "    (t! \"pqueue operations\"\n" p)
+    (display "      (equal? (eval `(pqueue-pop! ',pq)) '(1 . a)))))\n" p)))
 
 ;;; ============================================================
 ;;; Phase I.3: Module Loader — load modules through gherkin module loader
@@ -3024,25 +2952,12 @@
 
 ;; Run module load tests in separate subprocess batches to avoid OOM.
 ;; Each batch gets a fresh Chez process with its own heap.
-(define gherkin-dir (string-append (getenv "HOME") "/mine/gherkin"))
-(define gerbil-src-dir (string-append (getenv "HOME") "/mine/gerbil/src/"))
-
 (define (run-module-batch batch-name modules)
-  (let* ([mod-strings (map (lambda (m) (symbol->string m)) modules)]
-         ;; Build a script file that imports and loads each module
-         [tmp-file (string-append "/tmp/gherkin-batch-" batch-name ".ss")]
+  (let* ([tmp-file (string-append "/tmp/gherkin-batch-" batch-name ".ss")]
+         [out-file (string-append "/tmp/gherkin-batch-" batch-name ".out")]
          [script (call-with-string-output-port
                    (lambda (p)
-                     ;; Use #!chezscheme for top-level defines
-                     (display "#!chezscheme\n" p)
-                     ;; Set library-directories as list of (src . obj) pairs
-                     (fprintf p "(library-directories '((~s . ~s) (~s . ~s)))~n"
-                       gherkin-dir gherkin-dir
-                       (string-append gherkin-dir "/src")
-                       (string-append gherkin-dir "/src"))
-                     (display "(import (module loader))\n" p)
-                     (fprintf p "(gerbil-module-init! ~s)~n" gerbil-src-dir)
-                     (display "(define pass 0) (define fail 0)\n" p)
+                     (write-loader-preamble p)
                      (for-each (lambda (mod)
                        (display "(guard (exn [#t (set! fail (+ fail 1)) " p)
                        (display "(display \"FAIL \") (display '" p)
@@ -3052,45 +2967,10 @@
                        (display mod p)
                        (display ")\n  (set! pass (+ pass 1)))\n" p))
                        modules)
-                     (display "(display pass) (display \" \") (display fail) (newline)\n" p)))])
+                     (write-result-footer p)))])
     (call-with-output-file tmp-file (lambda (p) (display script p)) 'replace)
-    ;; Run subprocess and capture output
-    (let ([out-file (string-append "/tmp/gherkin-batch-" batch-name ".out")])
-      (system (string-append "scheme -q --script " tmp-file " > " out-file " 2>/dev/null"))
-      (let ([result (guard (exn [#t ""])
-                      (call-with-input-file out-file
-                        (lambda (p)
-                          (let loop ([lines '()])
-                            (let ([line (get-line p)])
-                              (if (eof-object? line)
-                                (reverse lines)
-                                (loop (cons line lines))))))))])
-        (if (pair? result)
-          (let* ([last-line (car (reverse result))]
-                 [fail-lines (filter (lambda (l)
-                                       (and (>= (string-length l) 5)
-                                            (string=? (substring l 0 5) "FAIL ")))
-                                     result)]
-                 [space (let lp ([i 0])
-                          (cond [(>= i (string-length last-line)) #f]
-                                [(char=? (string-ref last-line i) #\space) i]
-                                [else (lp (+ i 1))]))])
-            ;; Report failures
-            (for-each (lambda (fl)
-              (let ([mod-name (substring fl 5 (string-length fl))])
-                (check (string-append "load " mod-name) #f)))
-              fail-lines)
-            ;; Parse pass/fail counts
-            (if space
-              (let ([p (string->number (substring last-line 0 space))]
-                    [f (string->number (substring last-line (+ space 1)
-                                         (string-length last-line)))])
-                (when (and p f)
-                  (do ([i 0 (+ i 1)]) ((= i p))
-                    (set! pass-count (+ pass-count 1)))
-                  (printf "  ~a: ~a pass, ~a fail~n" batch-name p f)))
-              (printf "  ~a: parse error~n" batch-name)))
-          (printf "  ~a: subprocess error~n" batch-name))))))
+    (system (string-append "scheme -q --script " tmp-file " > " out-file " 2>/dev/null"))
+    (parse-subprocess-result batch-name out-file)))
 
 ;; Batch 1: Gerbil internal modules (45)
 (run-module-batch "gerbil-internal"

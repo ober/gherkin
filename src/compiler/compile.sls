@@ -1621,20 +1621,22 @@
                          (strip-type-annotations body-forms)
                          (strip-type-annotations (list body-forms)))]
            [compiled (map (lambda (f)
-                            (if (and (pair? f) (memq (car f) '(def define def*)))
+                            (if (and (pair? f) (memq (car f) '(def define def* defrules defrule defsyntax)))
                               (gerbil-compile-top f)
                               (gerbil-compile-expression f)))
                           body-forms)])
       ;; Check if defines are interleaved with expressions
       (if (body-needs-rewrite? compiled)
         ;; Rewrite: collect all defines into a letrec*, expressions into begin
-        (let-values ([(bindings exprs) (extract-body-bindings compiled)])
-          (if (null? bindings)
-            (if (null? exprs) '((void))
-                exprs)
-            (if (null? exprs)
-              `((letrec* ,bindings (void)))
-              `((letrec* ,bindings ,@exprs)))))
+        ;; define-syntax forms stay at body level (before letrec*)
+        (let-values ([(bindings exprs syntax-defs) (extract-body-bindings compiled)])
+          (let ([body-tail
+                  (if (null? bindings)
+                    (if (null? exprs) '((void)) exprs)
+                    (if (null? exprs)
+                      `((letrec* ,bindings (void)))
+                      `((letrec* ,bindings ,@exprs))))])
+            (append syntax-defs body-tail)))
         ;; No interleaving — keep as-is
         compiled)))
 
@@ -1644,7 +1646,7 @@
       (cond
         [(null? forms) #f]
         [(and (pair? (car forms))
-              (memq (car (car forms)) '(define define-values)))
+              (memq (car (car forms)) '(define define-values define-syntax)))
          (if seen-expr? #t
              (loop (cdr forms) #f))]
         [(and (pair? (car forms)) (eq? (car (car forms)) 'begin))
@@ -1655,12 +1657,13 @@
          (loop (cdr forms) #t)])))
 
   (define (extract-body-bindings forms)
-    ;; Split compiled forms into (bindings . expressions)
+    ;; Split compiled forms into (bindings, expressions, syntax-defs)
     ;; bindings = ((name init) ...) for letrec*
     ;; exprs = non-define expressions in order
-    (let loop ([forms forms] [bindings '()] [exprs '()])
+    ;; syntax-defs = (define-syntax ...) forms that stay at body level
+    (let loop ([forms forms] [bindings '()] [exprs '()] [syntax-defs '()])
       (if (null? forms)
-        (values (reverse bindings) (reverse exprs))
+        (values (reverse bindings) (reverse exprs) (reverse syntax-defs))
         (let ([form (car forms)])
           (cond
             [(and (pair? form) (eq? (car form) 'define))
@@ -1669,22 +1672,26 @@
                  ;; (define (name args...) body...) → (name (lambda (args) body))
                  (loop (cdr forms)
                        (cons `(,(car sig) (lambda ,(cdr sig) ,@body)) bindings)
-                       exprs)
+                       exprs syntax-defs)
                  ;; (define name expr) → (name expr)
                  (loop (cdr forms)
                        (cons `(,sig ,(if (null? body) '(void) (car body))) bindings)
-                       exprs)))]
+                       exprs syntax-defs)))]
+            [(and (pair? form) (eq? (car form) 'define-syntax))
+             ;; Keep define-syntax at body level
+             (loop (cdr forms) bindings exprs (cons form syntax-defs))]
             [(and (pair? form) (eq? (car form) 'define-values))
              ;; (define-values (a b) expr) — harder, add as expression
-             (loop (cdr forms) bindings (cons form exprs))]
+             (loop (cdr forms) bindings (cons form exprs) syntax-defs)]
             [(and (pair? form) (eq? (car form) 'begin))
              ;; Flatten begin
-             (let-values ([(b e) (extract-body-bindings (cdr form))])
+             (let-values ([(b e s) (extract-body-bindings (cdr form))])
                (loop (cdr forms)
                      (append (reverse b) bindings)
-                     (append (reverse e) exprs)))]
+                     (append (reverse e) exprs)
+                     (append (reverse s) syntax-defs)))]
             [else
-             (loop (cdr forms) bindings (cons form exprs))])))))
+             (loop (cdr forms) bindings (cons form exprs) syntax-defs)])))))
 
   ;; --- let compilation ---
   ;; Extract variable name from a possibly-typed binding
@@ -3062,7 +3069,7 @@
       ;; Clause for N required args (all optionals use defaults)
       ;; Clause for N+1 (first optional supplied) etc.
       ;; Clause for N+M (all optionals supplied)
-      (let ((compiled-body (map gerbil-compile-expression body)))
+      (let ((compiled-body (compile-body body)))
         (if rest
           ;; Has rest arg — just one clause with let defaults
           `(define (,name ,@req . __rest-args)
