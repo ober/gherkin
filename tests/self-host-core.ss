@@ -2200,6 +2200,50 @@
                `(,core-form
                   ,(map (lambda (b) (list (list (car b)) (chez->core (cadr b)))) bindings)
                   ,@(map chez->core body))))]
+          ;; do → letrec + named-let loop pattern
+          [(and (pair? c) (eq? (car c) 'do))
+           ;; (do ((var init step) ...) (test expr ...) body ...)
+           ;; Convert to letrec with loop
+           (let* ([bindings (cadr c)]
+                  [test-clause (caddr c)]
+                  [body (cdddr c)]
+                  [loop-name (gensym "do-loop")]
+                  [vars (map car bindings)]
+                  [inits (map cadr bindings)]
+                  [steps (map (lambda (b) (if (null? (cddr b)) (car b) (caddr b))) bindings)]
+                  [test (car test-clause)]
+                  [test-body (cdr test-clause)])
+             `(,__pct-call
+                (,__pct-lambda ()
+                  (,__pct-call
+                    (,__pct-lambda (,loop-name)
+                      (,__pct-set! ,loop-name
+                        (,__pct-lambda ,vars
+                          (,__pct-if ,(chez->core test)
+                            (,__pct-begin ,@(map chez->core test-body))
+                            (,__pct-begin
+                              ,@(map chez->core body)
+                              (,__pct-call (,__pct-ref ,loop-name)
+                                ,@(map chez->core steps))))))
+                      (,__pct-call (,__pct-ref ,loop-name)
+                        ,@(map chez->core inits)))
+                    (,__pct-quote #f)))))]
+          ;; case → nested if with memv checks
+          [(and (pair? c) (eq? (car c) 'case))
+           (let ([key-var (gensym "key")])
+             `(,__pct-call
+                (,__pct-lambda (,key-var)
+                  ,(let loop ([clauses (cddr c)])
+                     (cond [(null? clauses) `(,__pct-quote ,(void))]
+                           [(eq? (caar clauses) 'else)
+                            `(,__pct-begin ,@(map chez->core (cdar clauses)))]
+                           [else `(,__pct-if
+                                    (,__pct-call (,__pct-ref memv)
+                                      (,__pct-ref ,key-var)
+                                      (,__pct-quote ,(caar clauses)))
+                                    (,__pct-begin ,@(map chez->core (cdar clauses)))
+                                    ,(loop (cdr clauses)))])))
+                ,(chez->core (cadr c))))]
           [(pair? c)
            ;; Function call → (%#call fn args...)
            `(,__pct-call ,@(map chez->core c))]
