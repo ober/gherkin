@@ -391,7 +391,14 @@
            ((eq? head 'module)
             (if (and (pair? (cdr form)) (pair? (cddr form)))
               (let* ((body (cddr form))
-                     (compiled (map gerbil-compile-top body))
+                     ;; Compile body forms tolerantly — skip individual failures
+                     (compiled (let loop ((forms body) (acc '()))
+                                 (if (null? forms)
+                                   (reverse acc)
+                                   (loop (cdr forms)
+                                         (cons (guard (exn [#t '(begin)])
+                                                 (gerbil-compile-top (car forms)))
+                                               acc)))))
                      ;; Strip import/export/empty-begin from module bodies
                      (filtered (filter
                                  (lambda (c)
