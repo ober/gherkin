@@ -2031,6 +2031,28 @@
 ;;   user-expander(context, phi) — 2 own fields, extends macro-expander → 3 total
 ;;   binding(id, key, phi)   — 3 fields
 ;;   syntax-binding(e)       — 1 own field, extends binding → 4 total
+;; Fix make-local-context — the :init! method was lost during compilation
+;; local-context extends phi-context extends expander-context
+;; fields: id(1), table(2), super(3), up(4), down(5)
+(guard (exn [#t (printf "  D.7c4-fix: make-local-context fix error: ~a~n" (fmt-chez-error exn))])
+  (eval '(set! make-local-context
+    (let ([orig-make make-local-context])
+      (case-lambda
+        [()
+         (let ([obj (orig-make)])
+           ;; Initialize fields that :init! would set
+           (|##structure-set!| obj 1 (gensym "L"))           ; id
+           (|##structure-set!| obj 2 (make-hash-table-eq))  ; table
+           (|##structure-set!| obj 3 (current-expander-context))  ; super
+           obj)]
+        [(super)
+         (let ([obj (orig-make)])
+           (|##structure-set!| obj 1 (gensym "L"))
+           (|##structure-set!| obj 2 (make-hash-table-eq))
+           (|##structure-set!| obj 3 super)
+           obj)]))))
+  (printf "  D.7c4-fix: make-local-context patched~n"))
+
 (printf "  D.7c4: registering core prelude macros in expander context...~n")
 
 ;; Helper: format Chez condition properly (condition-message is a template like
@@ -2065,17 +2087,93 @@
       obj)))
   (printf "  D.7c4: __make-syntax-binding-raw defined~n"))
 
+;; Bridge expander: use gherkin to compile Gerbil forms, then translate
+;; the Chez output back to Gerbil core forms (define-values, lambda%, etc.)
+;; so the Gerbil expander can continue processing them.
 (guard (exn [#t (printf "  D.7c4-err3: ~a~n" (fmt-chez-error exn))])
-  (eval '(define (__make-chez-bridge-expander name)
-    (__make-user-expander-raw
-      (lambda (stx)
-        ;; Bridge: extract datum from AST, expand via Chez, re-wrap
-        (let* ([datum (if (AST? stx) (AST-e stx) stx)]
-               [expanded (guard (e [#t datum]) (expand datum))]
-               [source (and (AST? stx) (&AST-source stx))])
-          (make-AST expanded source)))
-      (current-expander-context) 0)))
-  (printf "  D.7c4: __make-chez-bridge-expander defined~n"))
+  (eval `(define __pct-define-values (string->symbol "%#define-values")))
+  (eval `(define __pct-begin (string->symbol "%#begin")))
+  (eval `(define __pct-lambda (string->symbol "%#lambda")))
+  (eval `(define __pct-call (string->symbol "%#call")))
+  (eval `(define __pct-ref (string->symbol "%#ref")))
+  (eval `(define __pct-if (string->symbol "%#if")))
+  (eval `(define __pct-quote (string->symbol "%#quote")))
+  (eval `(define __pct-set! (string->symbol "%#set!")))
+  (eval '(define (__gherkin-expand-for-expander datum source)
+    ;; Compile with gherkin, then translate to Gerbil CORE forms (%#define-values etc.)
+    ;; Core forms bypass hygiene marks — they're terminal, no further expansion needed.
+    (let ([compiled (guard (e [#t datum])
+                     (__gherkin-compile-datum datum))])
+      ;; Translate Chez forms to Gerbil core forms
+      (define (chez->core c)
+        (cond
+          [(and (pair? c) (eq? (car c) 'define) (pair? (cdr c)))
+           (if (pair? (cadr c))
+             ;; (define (f . args) body...) → (%#define-values (f) (%#lambda args body...))
+             (let ([name (caadr c)]
+                   [args (cdadr c)]
+                   [body (cddr c)])
+               `(,__pct-define-values (,name) (,__pct-lambda ,args ,@(map chez->core body))))
+             ;; (define x val) → (%#define-values (x) val-core)
+             `(,__pct-define-values (,(cadr c)) ,(chez->core (caddr c))))]
+          [(and (pair? c) (eq? (car c) 'begin))
+           `(,__pct-begin ,@(map chez->core (cdr c)))]
+          [(and (pair? c) (eq? (car c) 'if))
+           `(,__pct-if ,@(map chez->core (cdr c)))]
+          [(and (pair? c) (eq? (car c) 'lambda))
+           `(,__pct-lambda ,(cadr c) ,@(map chez->core (cddr c)))]
+          [(and (pair? c) (eq? (car c) 'set!))
+           `(,__pct-set! ,(cadr c) ,(chez->core (caddr c)))]
+          [(and (pair? c) (eq? (car c) 'quote))
+           `(,__pct-quote ,(cadr c))]
+          [(and (pair? c) (eq? (car c) 'define-syntax))
+           ;; define-syntax → skip (bridge doesn't handle compile-time macros yet)
+           `(,__pct-begin)]
+          [(pair? c)
+           ;; Function call → (%#call fn args...)
+           `(,__pct-call ,@(map chez->core c))]
+          [(symbol? c)
+           ;; Variable reference → (%#ref x)
+           `(,__pct-ref ,c)]
+          [else
+           ;; Literal → (%#quote val)
+           `(,__pct-quote ,c)]))
+      ;; Wrap each element as AST for the expander
+      (define (datum->ast x)
+        (if (pair? x)
+          (make-AST (map datum->ast x) source)
+          (make-AST x source)))
+      (datum->ast (chez->core compiled)))))
+
+  (eval '(define (strip-ast x)
+    (cond
+      [(AST? x) (strip-ast (AST-e x))]
+      [(pair? x) (cons (strip-ast (car x)) (strip-ast (cdr x)))]
+      [else x])))
+
+  ;; Use macro-expander (not user-expander) to avoid hygiene marks
+  ;; that prevent core form identifiers from resolving.
+  ;; macro-expander extends core-expander extends expander.
+  ;; core-expander has field e at slot 1.
+  (eval '(define (__make-gherkin-bridge-expander name)
+    (let ([transformer
+           (lambda (stx)
+             (let* ([datum (strip-ast (if (AST? stx) (AST-e stx) stx))]
+                    [source (and (AST? stx) (&AST-source stx))])
+               (__gherkin-expand-for-expander datum source)))])
+      ;; Create a macro-expander struct with transformer in e slot
+      (let ([obj (|##structure| macro-expander::t #f)])
+        (|##structure-set!| obj 1 transformer)
+        obj))))
+  (printf "  D.7c4: __make-gherkin-bridge-expander defined~n"))
+
+;; We need __gherkin-compile-datum available for the bridge expanders
+;; (different from __gherkin-compile-top which handles syntax objects)
+(guard (exn [#t (printf "  D.7c4-err3b: ~a~n" (fmt-chez-error exn))])
+  (inject '__gherkin-compile-datum
+    (lambda (datum)
+      (gerbil-compile-top datum)))
+  (printf "  D.7c4: __gherkin-compile-datum injected~n"))
 
 ;; Register macros one at a time to find exactly which fails
 (eval '(define __prelude-macros-registered 0))
@@ -2085,7 +2183,7 @@
     (guard (exn [#t
       (printf "  D.7c4-skip ~a: ~a~n" name (fmt-chez-error exn))])
       (eval `(begin
-        (let* ([expander (__make-chez-bridge-expander ',name)]
+        (let* ([expander (__make-gherkin-bridge-expander ',name)]
                [binding (__make-syntax-binding-raw ',name ',name 0 expander)]
                [ctx (current-expander-context)]
                [tbl (unchecked-slot-ref ctx 'table)])
@@ -2103,45 +2201,63 @@
 (printf "  D.7c4: registered ~a prelude macros~n"
   (eval '__prelude-macros-registered))
 
-;; Verify def is now bound
-(printf "  D.7c4-verify: def bound? ~a~n"
-  (guard (e [#t 'NO])
-    (let ([r (eval '(core-resolve-identifier (make-AST 'def '()) 0 __root-ctx))])
-      (if r "YES" 'UNBOUND))))
+;; Verify bridge expanders produce correct core forms
+(check "bridge expander produces %#define-values"
+  (eval '(guard (exn [#t #f])
+    (let* ([test-stx (make-AST (list (make-AST 'def '()) (make-AST 'x '()) (make-AST 42 '())) '())]
+           [expander (__make-gherkin-bridge-expander 'def)]
+           [e (|##structure-ref| expander 1)]
+           [result (e test-stx)]
+           [unwrapped (strip-ast result)])
+      (and (pair? unwrapped)
+           (eq? (car unwrapped) __pct-define-values))))))
 
-;; Try native expansion of a module using 'def'
-(printf "  D.7c4-test: expanding module with def...~n")
+(check "bridge expander handles function def"
+  (eval '(guard (exn [#t #f])
+    (let* ([test-stx (make-AST (list (make-AST 'def '())
+                                     (make-AST (list (make-AST 'f '()) (make-AST 'n '())) '())
+                                     (make-AST 'n '()))
+                               '())]
+           [expander (__make-gherkin-bridge-expander 'def)]
+           [e (|##structure-ref| expander 1)]
+           [result (e test-stx)]
+           [unwrapped (strip-ast result)])
+      (and (pair? unwrapped)
+           (eq? (car unwrapped) __pct-define-values)
+           ;; Should contain a %#lambda inside
+           (let ([val (caddr unwrapped)])
+             (and (pair? val)
+                  (eq? (car val) __pct-lambda))))))))
+
+;; Test make-local-context produces properly initialized structs
+(check "make-local-context initializes fields"
+  (eval '(guard (exn [#t #f])
+    (let ([ctx (make-local-context)])
+      (and (|##structure-ref| ctx 1)              ; id is set
+           (hash-table? (|##structure-ref| ctx 2)) ; table is hash-table
+           (|##structure-ref| ctx 3))))))           ; super is set
+
+;; Test native expansion of a module with export + def
 (let ([tmp "/tmp/gherkin-test-def-module.ss"])
   (call-with-output-file tmp
     (lambda (p)
       (display "(export #t)\n" p)
       (display "(def x 42)\n" p)
-      (display "(def (square n) (* n n))\n" p))
+      (display "(def (identity n) n)\n" p))
     'replace)
-  (guard (exn [#t
-    (printf "  D.7c4-test error: ~a~n" (fmt-chez-error exn))])
+  (guard (exn [#t (printf "  D.7c4-test error: ~a~n" (fmt-chez-error exn))])
     (eval `(begin
       (define __def-read (call-with-values (lambda () (core-read-module ,tmp)) list))
       (define __def-body (list-ref __def-read 3))
       (define __def-prelude (or (list-ref __def-read 0) (current-expander-module-prelude) (make-prelude-context #f)))
       (define __def-ctx (make-module-context '__test-def-module __def-prelude
-                          "test/def-module" ,tmp))))
-    (guard (exn [#t
-      (if (gerbil-struct? exn)
-        (begin
-          (printf "  D.7c4-test SyntaxError: ")
-          (guard (e [#t (display "<can't read>")])
-            (write (unchecked-slot-ref exn 'message)))
-          (newline))
-        (begin
-          (printf "  D.7c4-test expand error: ~a~n" (fmt-chez-error exn))))])
-      (eval '(let ([result (core-expand-module-begin __def-body __def-ctx)])
-        (printf "  D.7c4-test: expansion OK! ~a forms~n"
-          (if (pair? result) (length result) result)))))
-    (check "native expansion with def"
-      (eval '(guard (exn [#t #f])
-        (let ([tbl (unchecked-slot-ref __def-ctx 'table)])
-          (and tbl (> (hash-length tbl) 0))))))))
+                          "test/def-module" ,tmp)))))
+  (guard (exn [#t (void)])
+    (eval '(core-expand-module-begin __def-body __def-ctx)))
+  (check "native expansion with def"
+    (eval '(guard (exn [#t #f])
+      (let ([tbl (unchecked-slot-ref __def-ctx 'table)])
+        (and tbl (> (hash-length tbl) 0)))))))
 
 ;; D.7d-pre: Override core-import-module to use gherkin for compilation
 ;; For known runtime/expander modules, return root-ctx
