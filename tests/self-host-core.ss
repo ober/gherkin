@@ -2209,11 +2209,16 @@
           [else
            ;; Literal → (%#quote val)
            `(,__pct-quote ,c)]))
-      ;; Wrap each element as AST for the expander
+      ;; Wrap each element as AST for the expander (handles dotted pairs)
       (define (datum->ast x)
-        (if (pair? x)
-          (make-AST (map datum->ast x) source)
-          (make-AST x source)))
+        (cond
+          [(pair? x)
+           (make-AST (let loop ([lst x])
+                       (cond [(pair? lst) (cons (datum->ast (car lst)) (loop (cdr lst)))]
+                             [(null? lst) '()]
+                             [else (datum->ast lst)]))  ; dotted pair tail
+                     source)]
+          [else (make-AST x source)]))
       (datum->ast (chez->core compiled)))))
 
   (eval '(define (strip-ast x)
@@ -2489,6 +2494,67 @@
       (parameterize ((current-expander-allow-rebind? #t))
         (core-expand-module-begin __cl-body __cl-ctx))
       (let ([tbl (unchecked-slot-ref __cl-ctx 'table)])
+        (and tbl (> (hash-length tbl) 0)))))))
+
+;; Test module with defstruct
+(let ([tmp "/tmp/gherkin-test-struct-module.ss"])
+  (call-with-output-file tmp
+    (lambda (p)
+      (display "(export #t)\n" p)
+      (display "(defstruct point (x y))\n" p)
+      (display "(def (make-origin) (make-point 0 0))\n" p))
+    'replace)
+  (guard (exn [#t (printf "  D.7c5-struct error: ~a~n" (fmt-chez-error exn))])
+    (eval `(begin
+      (define __struct-read (call-with-values (lambda () (core-read-module ,tmp)) list))
+      (define __struct-body (list-ref __struct-read 3))
+      (define __struct-prelude (or (list-ref __struct-read 0) (current-expander-module-prelude) (make-prelude-context #f)))
+      (define __struct-ctx (make-module-context '__test-struct-module __struct-prelude
+                             "test/struct-module" ,tmp)))))
+  (check "native expansion with defstruct"
+    (eval '(guard (exn [#t
+      (printf "  D.7c5-struct FAIL: ~a~n"
+        (if (gerbil-struct? exn)
+          (guard (e [#t "<err>"]) (unchecked-slot-ref exn 'message))
+          (if (message-condition? exn)
+            (let ([msg (condition-message exn)]
+                  [irr (if (irritants-condition? exn) (condition-irritants exn) '())])
+              (format "~a ~a" msg irr))
+            exn)))
+      #f])
+      (parameterize ((current-expander-allow-rebind? #t))
+        (core-expand-module-begin __struct-body __struct-ctx))
+      (let ([tbl (unchecked-slot-ref __struct-ctx 'table)])
+        (and tbl (> (hash-length tbl) 0)))))))
+
+;; Test module with try/catch (error handling)
+(let ([tmp "/tmp/gherkin-test-try-module.ss"])
+  (call-with-output-file tmp
+    (lambda (p)
+      (display "(export #t)\n" p)
+      (display "(def (safe-div a b) (try (/ a b) (catch (e) 0)))\n" p))
+    'replace)
+  (guard (exn [#t (printf "  D.7c5-try error: ~a~n" (fmt-chez-error exn))])
+    (eval `(begin
+      (define __try-read (call-with-values (lambda () (core-read-module ,tmp)) list))
+      (define __try-body (list-ref __try-read 3))
+      (define __try-prelude (or (list-ref __try-read 0) (current-expander-module-prelude) (make-prelude-context #f)))
+      (define __try-ctx (make-module-context '__test-try-module __try-prelude
+                          "test/try-module" ,tmp)))))
+  (check "native expansion with try/catch"
+    (eval '(guard (exn [#t
+      (printf "  D.7c5-try FAIL: ~a~n"
+        (if (gerbil-struct? exn)
+          (guard (e [#t "<err>"]) (unchecked-slot-ref exn 'message))
+          (if (message-condition? exn)
+            (let ([msg (condition-message exn)]
+                  [irr (if (irritants-condition? exn) (condition-irritants exn) '())])
+              (format "~a ~a" msg irr))
+            exn)))
+      #f])
+      (parameterize ((current-expander-allow-rebind? #t))
+        (core-expand-module-begin __try-body __try-ctx))
+      (let ([tbl (unchecked-slot-ref __try-ctx 'table)])
         (and tbl (> (hash-length tbl) 0)))))))
 
 ;; D.7d-pre: Override core-import-module to use gherkin for compilation
