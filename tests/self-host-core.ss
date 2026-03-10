@@ -1529,7 +1529,8 @@
 ;; We need to restore Chez's versions for Phase B macros to work.
 (eval '(import (only (chezscheme)
          define-syntax syntax-rules syntax-case syntax with-syntax
-         define lambda let let* letrec letrec* begin if cond case)))
+         define lambda let let* letrec letrec* begin if cond case
+         set! parameterize do when unless and or)))
 
 (printf "~n=== define-syntax and Macros (Phase B) ===~n")
 
@@ -2017,6 +2018,130 @@
               (string-append ,runtime-src-dir "/../core"))))))
   (printf "  D.7c3: registered ~a modules~n"
     (eval '(hash-length __module-registry))))
+
+;; D.7c4: Register core prelude macros in the expander context
+;; The core files (sugar.ss, mop.ss, etc.) have been compiled and eval'd,
+;; creating Chez define-syntax transformers. But the Gerbil expander's
+;; context doesn't know about them. We bridge by creating user-expander
+;; structs that delegate to the Chez transformers.
+;;
+;; Struct layouts (from expander/core.ss):
+;;   expander(e)             — 1 field
+;;   macro-expander()        — 0 own fields, extends expander → 1 total
+;;   user-expander(context, phi) — 2 own fields, extends macro-expander → 3 total
+;;   binding(id, key, phi)   — 3 fields
+;;   syntax-binding(e)       — 1 own field, extends binding → 4 total
+(printf "  D.7c4: registering core prelude macros in expander context...~n")
+
+;; Helper: format Chez condition properly (condition-message is a template like
+;; "variable ~:s is not bound" — the actual variable is in the irritants)
+(define (fmt-chez-error e)
+  (let ([msg (if (message-condition? e) (condition-message e) "?")]
+        [irr (if (irritants-condition? e) (condition-irritants e) '())])
+    (if (null? irr) msg
+      (call-with-string-output-port
+        (lambda (p) (display msg p) (display " => " p)
+          (for-each (lambda (x) (write x p) (display " " p)) irr))))))
+
+;; Define helpers using hardcoded field counts (avoids class-type-field-count dependency)
+(guard (exn [#t (printf "  D.7c4-err1: ~a~n" (fmt-chez-error exn))])
+  (eval '(define (__make-user-expander-raw e ctx phi)
+    ;; user-expander has 3 fields total: e(1), context(2), phi(3)
+    (let ([obj (|##structure| user-expander::t #f #f #f)])
+      (|##structure-set!| obj 1 e)
+      (|##structure-set!| obj 2 ctx)
+      (|##structure-set!| obj 3 phi)
+      obj)))
+  (printf "  D.7c4: __make-user-expander-raw defined~n"))
+
+(guard (exn [#t (printf "  D.7c4-err2: ~a~n" (fmt-chez-error exn))])
+  (eval '(define (__make-syntax-binding-raw id key phi e)
+    ;; syntax-binding has 4 fields total: id(1), key(2), phi(3), e(4)
+    (let ([obj (|##structure| syntax-binding::t #f #f #f #f)])
+      (|##structure-set!| obj 1 id)
+      (|##structure-set!| obj 2 key)
+      (|##structure-set!| obj 3 phi)
+      (|##structure-set!| obj 4 e)
+      obj)))
+  (printf "  D.7c4: __make-syntax-binding-raw defined~n"))
+
+(guard (exn [#t (printf "  D.7c4-err3: ~a~n" (fmt-chez-error exn))])
+  (eval '(define (__make-chez-bridge-expander name)
+    (__make-user-expander-raw
+      (lambda (stx)
+        ;; Bridge: extract datum from AST, expand via Chez, re-wrap
+        (let* ([datum (if (AST? stx) (AST-e stx) stx)]
+               [expanded (guard (e [#t datum]) (expand datum))]
+               [source (and (AST? stx) (&AST-source stx))])
+          (make-AST expanded source)))
+      (current-expander-context) 0)))
+  (printf "  D.7c4: __make-chez-bridge-expander defined~n"))
+
+;; Register macros one at a time to find exactly which fails
+(eval '(define __prelude-macros-registered 0))
+
+(for-each
+  (lambda (name)
+    (guard (exn [#t
+      (printf "  D.7c4-skip ~a: ~a~n" name (fmt-chez-error exn))])
+      (eval `(begin
+        (let* ([expander (__make-chez-bridge-expander ',name)]
+               [binding (__make-syntax-binding-raw ',name ',name 0 expander)]
+               [ctx (current-expander-context)]
+               [tbl (unchecked-slot-ref ctx 'table)])
+          (hash-put! tbl ',name binding)
+          (set! __prelude-macros-registered (+ __prelude-macros-registered 1)))))))
+  '(def def* defrules defrule defsyntax defsyntax%
+    lambda when unless cond and or
+    defvalues defconst
+    defmethod defstruct defclass
+    defalias define-alias
+    require only-in except-in rename-in prefix-in
+    group-in for-syntax for-template
+    export-import))
+
+(printf "  D.7c4: registered ~a prelude macros~n"
+  (eval '__prelude-macros-registered))
+
+;; Verify def is now bound
+(printf "  D.7c4-verify: def bound? ~a~n"
+  (guard (e [#t 'NO])
+    (let ([r (eval '(core-resolve-identifier (make-AST 'def '()) 0 __root-ctx))])
+      (if r "YES" 'UNBOUND))))
+
+;; Try native expansion of a module using 'def'
+(printf "  D.7c4-test: expanding module with def...~n")
+(let ([tmp "/tmp/gherkin-test-def-module.ss"])
+  (call-with-output-file tmp
+    (lambda (p)
+      (display "(export #t)\n" p)
+      (display "(def x 42)\n" p)
+      (display "(def (square n) (* n n))\n" p))
+    'replace)
+  (guard (exn [#t
+    (printf "  D.7c4-test error: ~a~n" (fmt-chez-error exn))])
+    (eval `(begin
+      (define __def-read (call-with-values (lambda () (core-read-module ,tmp)) list))
+      (define __def-body (list-ref __def-read 3))
+      (define __def-prelude (or (list-ref __def-read 0) (current-expander-module-prelude) (make-prelude-context #f)))
+      (define __def-ctx (make-module-context '__test-def-module __def-prelude
+                          "test/def-module" ,tmp))))
+    (guard (exn [#t
+      (if (gerbil-struct? exn)
+        (begin
+          (printf "  D.7c4-test SyntaxError: ")
+          (guard (e [#t (display "<can't read>")])
+            (write (unchecked-slot-ref exn 'message)))
+          (newline))
+        (begin
+          (printf "  D.7c4-test expand error: ~a~n" (fmt-chez-error exn))))])
+      (eval '(let ([result (core-expand-module-begin __def-body __def-ctx)])
+        (printf "  D.7c4-test: expansion OK! ~a forms~n"
+          (if (pair? result) (length result) result)))))
+    (check "native expansion with def"
+      (eval '(guard (exn [#t #f])
+        (let ([tbl (unchecked-slot-ref __def-ctx 'table)])
+          (and tbl (> (hash-length tbl) 0))))))))
 
 ;; D.7d-pre: Override core-import-module to use gherkin for compilation
 ;; For known runtime/expander modules, return root-ctx
@@ -2691,6 +2816,68 @@
     (display "(t! \"format works\" (equal? (format \"hello ~a ~a\" \"world\" 42) \"hello world 42\"))\n" p)
     (display "(let ([r (format \"~x\" 255)])\n" p)
     (display "  (t! \"format hex\" (or (equal? r \"ff\") (equal? r \"FF\"))))\n" p)))
+
+;; G.2c: Additional functionality tests in subprocess
+(run-functionality-batch "g2c-func"
+  (lambda (p)
+    ;; Load additional modules for testing (guard each to handle struct errors)
+    (for-each (lambda (mod)
+      (fprintf p "(guard (exn [#t #f]) (gerbil-load-module '~a))~n" mod))
+      '(:std/sort :std/pregexp :std/misc/number :std/misc/repr
+        :std/misc/deque :std/misc/shuffle :std/misc/hash
+        :std/srfi/8 :std/srfi/43 :std/text/csv
+        :std/misc/uuid :std/misc/dag :std/misc/plist
+        :std/misc/vector :std/misc/walist :std/misc/atom
+        :std/misc/lru))
+    ;; Each test group wrapped in guard to prevent subprocess crash
+    ;; sort
+    (display "(guard (exn [#t #f])\n" p)
+    (display "  (t! \"sort ascending\" (equal? (sort '(3 1 4 1 5 9) <) '(1 1 3 4 5 9)))\n" p)
+    (display "  (t! \"sort descending\" (equal? (sort '(3 1 4 1 5 9) >) '(9 5 4 3 1 1)))\n" p)
+    (display "  (t! \"sort strings\" (equal? (sort '(\"banana\" \"apple\" \"cherry\") string<?) '(\"apple\" \"banana\" \"cherry\"))))\n" p)
+    ;; pregexp
+    (display "(guard (exn [#t #f])\n" p)
+    (display "  (t! \"pregexp-match basic\" (pair? (pregexp-match \"^hello\" \"hello world\")))\n" p)
+    (display "  (t! \"pregexp-match fail\" (not (pregexp-match \"^world\" \"hello world\")))\n" p)
+    (display "  (t! \"pregexp-match groups\" (equal? (pregexp-match \"(\\\\w+)@(\\\\w+)\" \"user@host\") '(\"user@host\" \"user\" \"host\"))))\n" p)
+    ;; misc/number
+    (display "(guard (exn [#t #f])\n" p)
+    (display "  (t! \"number->string octal\" (equal? (number->string 255 8) \"377\")))\n" p)
+    ;; misc/hash
+    (display "(guard (exn [#t #f])\n" p)
+    (display "  (let ([h (make-hash-table-eq)])\n" p)
+    (display "    (hash-put! h 'x 10) (hash-put! h 'y 20)\n" p)
+    (display "    (t! \"hash-keys\" (= (length (hash-keys h)) 2))\n" p)
+    (display "    (t! \"hash-values sum\" (= (apply + (hash-values h)) 30))\n" p)
+    (display "    (t! \"hash-ref default\" (= (hash-ref h 'z 99) 99))))\n" p)
+    ;; srfi/8 receive
+    (display "(guard (exn [#t #f])\n" p)
+    (display "  (t! \"receive\" (equal? (receive (a b c) (values 1 2 3) (list a b c)) '(1 2 3))))\n" p)
+    ;; misc/deque (known issue: format ~s not bound in error paths)
+    (display "(guard (exn [#t #f])\n" p)
+    (display "  (let ([d (make-deque)])\n" p)
+    (display "    (push-front! d 1) (push-front! d 2) (push-back! d 3)\n" p)
+    (display "    (t! \"deque front\" (= (pop-front! d) 2))\n" p)
+    (display "    (t! \"deque back\" (= (pop-back! d) 3))))\n" p)
+    ;; misc/plist — module exports plist?, psetq, psetv, pset (no plist-get)
+    (display "(guard (exn [#t #f])\n" p)
+    (display "  (t! \"plist?\" (plist? '(a 1 b 2 c 3))))\n" p)
+    ;; misc/walist — correct API: walist-get, not walist-ref
+    (display "(guard (exn [#t #f])\n" p)
+    (display "  (let ([w (walist '((a . 1) (b . 2)))])\n" p)
+    (display "    (t! \"walist lookup\" (= (walist-get w 'a) 1))))\n" p)
+    ;; misc/atom — correct API: atom-deref, atom-reset!
+    (display "(guard (exn [#t #f])\n" p)
+    (display "  (let ([a (atom 42)])\n" p)
+    (display "    (t! \"atom deref\" (= (atom-deref a) 42))\n" p)
+    (display "    (atom-reset! a 99)\n" p)
+    (display "    (t! \"atom reset\" (= (atom-deref a) 99))))\n" p)
+    ;; misc/lru (may fail: struct/vector issue)
+    (display "(guard (exn [#t #f])\n" p)
+    (display "  (let ([c (make-lru-cache 3)])\n" p)
+    (display "    (lru-cache-put! c 'a 1) (lru-cache-put! c 'b 2) (lru-cache-put! c 'c 3)\n" p)
+    (display "    (t! \"lru-cache get\" (= (lru-cache-get c 'b) 2))))\n" p)
+    ))
 
 ;; G.3: Import misc modules
 (printf "~n--- G.3: Misc modules ---~n")

@@ -549,7 +549,8 @@
     ;; fails because Gerbil redefines syntax-rules with an incompatible version.
     (eval '(import (only (chezscheme)
              define-syntax syntax-rules syntax-case syntax with-syntax
-             define lambda let let* letrec letrec* begin if cond case))))
+             define lambda let let* letrec letrec* begin if cond case
+             set! parameterize do when unless and or))))
 
   ;; ============================================================
   ;; Module path resolution

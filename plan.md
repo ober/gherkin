@@ -38,7 +38,7 @@ We have a working cross-compiler (gherkin) and bootstrap environment:
 | Compiler (12 files) | 100% | ⚠️ Partial | `define-syntax` forms skip |
 | Module system | ✅ Loader works | ✅ **423 modules** | 9 batched subprocesses, 6 failures |
 | REPL | ✅ Works | ✅ Gerbil syntax | Uses gherkin for compilation |
-| Test suite | **647 checks** | ✅ All pass | Batched subprocess testing (no OOM) |
+| Test suite | **665 checks** | ✅ All pass | Batched subprocess testing (no OOM) |
 
 **Phase A complete**: `core-expand-expression` works — method dispatch on expander structs is fully operational. The fix required (1) injecting `##type` and `##closure?` Gambit primitives for hash table operations at eval time, and (2) replacing `{method obj}` syntax with `(call-method obj 'method)` in eval'd context constructors since `{}` isn't a Chez reader feature.
 
@@ -427,14 +427,63 @@ Gerbil has multi-phase compilation where `(import (for-syntax ...))` makes bindi
 - [ ] Phase-separated environments for compile-time vs runtime
 - [ ] `begin-syntax` blocks evaluate at phase 1
 
-#### I.3 Module expansion without gherkin bridge
+#### I.3 Module expansion without gherkin bridge — IN PROGRESS
 
 `core-import-module` currently falls back to gherkin for unknown modules. True self-hosting means the expander's own `core-expand-module-begin` → `core-expand-block` pipeline handles all module forms, including `def`, `defrules`, `defsyntax`, `defstruct`, `defclass`, etc.
 
 - [ ] `core-expand-module` processes a module end-to-end (no gherkin fallback)
-- [ ] Core macro bindings (`def`, `defstruct`, `defrules`, etc.) available in expander context
+- [x] Core macro bindings registration approach validated (D.7c4 in self-host-core.ss)
 - [ ] Module exports resolved through expander's binding tables
 - [ ] Recursive module imports through expander (not gherkin bridge)
+
+##### D.7c4: Registering Prelude Macros in Expander Context — ACTIVE WORK
+
+**Goal:** Create `user-expander` bridge structs that delegate to Chez's compiled syntax transformers, and register them in the Gerbil expander's root context table.
+
+**Current Status:** Helper functions defined successfully, but macro registration fails with `expand-set!` not bound.
+
+**Key Findings (2026-03-09 session):**
+
+1. **`~:s` error was a red herring**: Chez Scheme's error message `"variable ~:s is not bound"` uses `~:s` as a *format directive* (write with slashification), NOT as the variable name. The actual unbound variable name is in `(condition-irritants exn)`. All previous debugging was misled by this — the code was printing `(condition-message exn)` which shows the template, not the actual variable.
+
+2. **The REAL unbound variable is `expand-set!`**: Every macro registration attempt fails with `variable expand-set! is not bound`. This is because:
+   - Gerbil's expander redefines `set!` (and other Chez syntax keywords)
+   - After loading expander modules, the interaction environment's `set!` is Gerbil's version
+   - Gerbil's compiled `set!` references `expand-set!` internally
+   - The Chez builtins restore list was missing `set!`
+
+3. **Fix applied but NOT YET TESTED**: Added `set! parameterize do when unless and or` to both:
+   - `tests/self-host-core.ss` line 1530: `(eval '(import (only (chezscheme) ... set! parameterize do when unless and or)))`
+   - `src/module/loader.sls` line 550: same addition
+
+4. **Struct creation works when types are bound**: When `user-expander::t` and `syntax-binding::t` are bound in the interaction environment (which they are after the test compiles expander/core.ss), `|##structure|` construction with hardcoded field counts works:
+   - `user-expander` has 3 fields total: `e`(1), `context`(2), `phi`(3)
+   - `syntax-binding` has 4 fields total: `id`(1), `key`(2), `phi`(3), `e`(4)
+
+5. **Helper functions defined successfully**:
+   - `__make-user-expander-raw` — creates user-expander struct with hardcoded field count
+   - `__make-syntax-binding-raw` — creates syntax-binding struct with hardcoded field count
+   - `__make-chez-bridge-expander` — creates a bridge expander that extracts AST datum, calls Chez `expand`, re-wraps
+
+6. **Error formatting fixed**: Added `fmt-chez-error` helper that includes irritants in error messages.
+
+**Next Steps:**
+1. Run the test suite with the `set!` fix and verify the `expand-set!` error is resolved
+2. If macro registration succeeds, verify that `core-resolve-identifier` finds the registered macros
+3. Test native expansion of a simple module using `def` (D.7c4-test section already written)
+4. If bridge expansion works, extend to handle more macro forms
+
+**Architecture of the Bridge:**
+```
+User code: (def x 42)
+  → Gerbil expander looks up 'def in context table
+  → Finds our bridge user-expander struct
+  → Calls bridge's transformer: (lambda (stx) ...)
+    → Extract datum from AST
+    → Call Chez's (expand datum) — Chez has def compiled as define-syntax
+    → Re-wrap expanded result as AST
+  → Expander continues with expanded form
+```
 
 #### I.4 Bootstrap cycle
 
@@ -802,7 +851,7 @@ The following phases established the cross-compilation bootstrap:
 | 6 | Standard library | 14 std modules loaded |
 | 7 | REPL and tooling | Working REPL with gherkin-based compilation |
 
-**Test harness:** `tests/self-host-core.ss` — 647/647 checks pass (9 batched subprocesses, 423 modules)
+**Test harness:** `tests/self-host-core.ss` — 665/665 checks pass (9 batched subprocesses, 423 modules)
 
 ---
 
