@@ -550,7 +550,26 @@
     (eval '(import (only (chezscheme)
              define-syntax syntax-rules syntax-case syntax with-syntax
              define lambda let let* letrec letrec* begin if cond case
-             set! parameterize do when unless and or))))
+             set! parameterize do when unless and or)))
+    ;; Fix make-local-context: the :init! defmethod is lost during gherkin
+    ;; compilation, producing structs with all #f fields. Patch to initialize
+    ;; id, table, and super fields properly.
+    (guard (exn [#t (void)])  ; silently skip if make-local-context not yet defined
+      (eval '(set! make-local-context
+        (let ([orig-make make-local-context])
+          (case-lambda
+            [()
+             (let ([obj (orig-make)])
+               (|##structure-set!| obj 1 (gensym "L"))
+               (|##structure-set!| obj 2 (make-hash-table-eq))
+               (|##structure-set!| obj 3 (current-expander-context))
+               obj)]
+            [(super)
+             (let ([obj (orig-make)])
+               (|##structure-set!| obj 1 (gensym "L"))
+               (|##structure-set!| obj 2 (make-hash-table-eq))
+               (|##structure-set!| obj 3 super)
+               obj)]))))))
 
   ;; ============================================================
   ;; Module path resolution
