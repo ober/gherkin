@@ -2557,6 +2557,68 @@
       (let ([tbl (unchecked-slot-ref __try-ctx 'table)])
         (and tbl (> (hash-length tbl) 0)))))))
 
+;; Test module with defrules (compile-time macro definition)
+(let ([tmp "/tmp/gherkin-test-defrules-module.ss"])
+  (call-with-output-file tmp
+    (lambda (p)
+      (display "(export #t)\n" p)
+      (display "(defrules swap! () ((_ a b) (let ((t a)) (set! a b) (set! b t))))\n" p)
+      (display "(def (test-swap) (let ((x 1) (y 2)) (swap! x y) (list x y)))\n" p))
+    'replace)
+  (guard (exn [#t (printf "  D.7c5-defrules error: ~a~n" (fmt-chez-error exn))])
+    (eval `(begin
+      (define __dr-read (call-with-values (lambda () (core-read-module ,tmp)) list))
+      (define __dr-body (list-ref __dr-read 3))
+      (define __dr-prelude (or (list-ref __dr-read 0) (current-expander-module-prelude) (make-prelude-context #f)))
+      (define __dr-ctx (make-module-context '__test-dr-module __dr-prelude
+                         "test/dr-module" ,tmp)))))
+  (check "native expansion with defrules"
+    (eval '(guard (exn [#t
+      (printf "  D.7c5-defrules FAIL: ~a~n"
+        (if (gerbil-struct? exn)
+          (guard (e [#t "<err>"]) (unchecked-slot-ref exn 'message))
+          (if (message-condition? exn)
+            (let ([msg (condition-message exn)]
+                  [irr (if (irritants-condition? exn) (condition-irritants exn) '())])
+              (format "~a ~a" msg irr))
+            exn)))
+      #f])
+      (parameterize ((current-expander-allow-rebind? #t))
+        (core-expand-module-begin __dr-body __dr-ctx))
+      (let ([tbl (unchecked-slot-ref __dr-ctx 'table)])
+        (and tbl (> (hash-length tbl) 0)))))))
+
+;; Test module with import (cross-module reference)
+(let ([tmp "/tmp/gherkin-test-import-module.ss"])
+  (call-with-output-file tmp
+    (lambda (p)
+      (display "(import :gerbil/runtime/hash)\n" p)
+      (display "(export #t)\n" p)
+      (display "(def (make-ht) (make-hash-table))\n" p))
+    'replace)
+  (guard (exn [#t (printf "  D.7c5-import error: ~a~n" (fmt-chez-error exn))])
+    (eval `(begin
+      (define __imp-read (call-with-values (lambda () (core-read-module ,tmp)) list))
+      (define __imp-body (list-ref __imp-read 3))
+      (define __imp-prelude (or (list-ref __imp-read 0) (current-expander-module-prelude) (make-prelude-context #f)))
+      (define __imp-ctx (make-module-context '__test-imp-module __imp-prelude
+                          "test/imp-module" ,tmp)))))
+  (check "native expansion with import"
+    (eval '(guard (exn [#t
+      (printf "  D.7c5-import FAIL: ~a~n"
+        (if (gerbil-struct? exn)
+          (guard (e [#t "<err>"]) (unchecked-slot-ref exn 'message))
+          (if (message-condition? exn)
+            (let ([msg (condition-message exn)]
+                  [irr (if (irritants-condition? exn) (condition-irritants exn) '())])
+              (format "~a ~a" msg irr))
+            exn)))
+      #f])
+      (parameterize ((current-expander-allow-rebind? #t))
+        (core-expand-module-begin __imp-body __imp-ctx))
+      (let ([tbl (unchecked-slot-ref __imp-ctx 'table)])
+        (and tbl (> (hash-length tbl) 0)))))))
+
 ;; D.7d-pre: Override core-import-module to use gherkin for compilation
 ;; For known runtime/expander modules, return root-ctx
 ;; For unknown modules (std/*), compile with gherkin and create a module-context
