@@ -2277,6 +2277,58 @@
 (printf "  D.7c4: registered ~a prelude macros~n"
   (eval '__prelude-macros-registered))
 
+;; D.7c4b: Register runtime bindings in the expander's root context
+;; These are Chez builtins that gherkin's output references but the Gerbil
+;; expander doesn't know about. Without these, expansion requires allow-rebind?.
+(printf "  D.7c4b: registering runtime bindings in expander context...~n")
+(eval '(define __runtime-bindings-registered 0))
+(for-each
+  (lambda (name)
+    (guard (exn [#t (void)])
+      (eval `(begin
+        (core-bind-runtime! (make-AST ',name '()) #t 0 (current-expander-context))
+        (set! __runtime-bindings-registered (+ __runtime-bindings-registered 1))))))
+  ;; Core Scheme runtime functions that gherkin output may reference
+  '(;; arithmetic
+    + - * / = < > <= >= zero? positive? negative? even? odd?
+    add1 sub1 abs min max modulo remainder quotient
+    ;; comparison
+    eq? eqv? equal? not
+    ;; pairs and lists
+    cons car cdr caar cadr cdar cddr
+    list list* append reverse length
+    null? pair? list?
+    map for-each filter fold-right fold-left
+    memq memv member assq assv assoc
+    ;; strings
+    string-append string-length string-ref substring
+    string=? string<? string>? string->symbol symbol->string
+    string->number number->string
+    ;; vectors
+    vector vector-ref vector-set! vector-length make-vector
+    vector? vector->list list->vector
+    ;; chars
+    char=? char<? char->integer integer->char
+    ;; I/O
+    display write newline print println
+    current-input-port current-output-port current-error-port
+    open-input-string open-output-string get-output-string
+    read write-char read-char
+    ;; control
+    apply values call-with-values
+    void error raise
+    call-with-current-continuation call/cc dynamic-wind
+    ;; hash tables
+    make-hash-table hash-table? hash-ref hash-set!
+    make-hash-table-eq hash-put! hash-get hash-length
+    ;; type predicates
+    boolean? number? integer? string? symbol? char? procedure?
+    fixnum? flonum? port? eof-object?
+    ;; misc
+    gensym format with-exception-handler guard))
+(printf "  D.7c4b: registered ~a runtime bindings~n"
+  (eval '__runtime-bindings-registered))
+
 ;; Verify bridge expanders produce correct core forms
 (check "bridge expander produces %#define-values"
   (eval '(guard (exn [#t #f])
