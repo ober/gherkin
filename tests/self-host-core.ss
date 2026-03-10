@@ -2166,6 +2166,15 @@
                    [else `(,__pct-if ,(chez->core (caar clauses))
                             (,__pct-begin ,@(map chez->core (cdar clauses)))
                             ,(loop (cdr clauses)))]))]
+          ;; case-lambda → core %#case-lambda
+          [(and (pair? c) (eq? (car c) 'case-lambda))
+           (let ([pct-case-lambda (string->symbol "%#case-lambda")])
+             `(,pct-case-lambda
+                ,@(map (lambda (clause)
+                         (let ([formals (car clause)]
+                               [body (cdr clause)])
+                           `(,formals ,@(map chez->core body))))
+                       (cdr c))))]
           ;; let/let*/letrec/letrec* → core let-values forms
           [(and (pair? c) (memq (car c) '(let let* letrec letrec*)))
            ;; Handle both (let ((x 1)) body) and (let name ((x 1)) body) [named let]
@@ -2420,6 +2429,66 @@
       (parameterize ((current-expander-allow-rebind? #t))
         (core-expand-module-begin __multi-body __multi-ctx))
       (let ([tbl (unchecked-slot-ref __multi-ctx 'table)])
+        (and tbl (> (hash-length tbl) 0)))))))
+
+;; Test module with match (pattern matching — a complex macro)
+(let ([tmp "/tmp/gherkin-test-match-module.ss"])
+  (call-with-output-file tmp
+    (lambda (p)
+      (display "(export #t)\n" p)
+      (display "(def (head lst) (match lst ([x . _] x) (else #f)))\n" p))
+    'replace)
+  (guard (exn [#t (printf "  D.7c5-match error: ~a~n" (fmt-chez-error exn))])
+    (eval `(begin
+      (define __match-read (call-with-values (lambda () (core-read-module ,tmp)) list))
+      (define __match-body (list-ref __match-read 3))
+      (define __match-prelude (or (list-ref __match-read 0) (current-expander-module-prelude) (make-prelude-context #f)))
+      (define __match-ctx (make-module-context '__test-match-module __match-prelude
+                            "test/match-module" ,tmp)))))
+  (check "native expansion with match"
+    (eval '(guard (exn [#t
+      (printf "  D.7c5-match FAIL: ~a~n"
+        (if (gerbil-struct? exn)
+          (guard (e [#t "<err>"]) (unchecked-slot-ref exn 'message))
+          (if (message-condition? exn)
+            (let ([msg (condition-message exn)]
+                  [irr (if (irritants-condition? exn) (condition-irritants exn) '())])
+              (format "~a ~a" msg irr))
+            exn)))
+      #f])
+      (parameterize ((current-expander-allow-rebind? #t))
+        (core-expand-module-begin __match-body __match-ctx))
+      (let ([tbl (unchecked-slot-ref __match-ctx 'table)])
+        (and tbl (> (hash-length tbl) 0)))))))
+
+;; Test module with case-lambda (multiple arities)
+(let ([tmp "/tmp/gherkin-test-caselam-module.ss"])
+  (call-with-output-file tmp
+    (lambda (p)
+      (display "(export #t)\n" p)
+      (display "(def my-add (case-lambda ((a) a) ((a b) (+ a b))))\n" p))
+    'replace)
+  (guard (exn [#t (printf "  D.7c5-caselam error: ~a~n" (fmt-chez-error exn))])
+    (eval `(begin
+      (define __cl-read (call-with-values (lambda () (core-read-module ,tmp)) list))
+      (define __cl-body (list-ref __cl-read 3))
+      (define __cl-prelude (or (list-ref __cl-read 0) (current-expander-module-prelude) (make-prelude-context #f)))
+      (define __cl-ctx (make-module-context '__test-cl-module __cl-prelude
+                         "test/cl-module" ,tmp)))))
+  (check "native expansion with case-lambda"
+    (eval '(guard (exn [#t
+      (printf "  D.7c5-caselam FAIL: ~a~n"
+        (if (gerbil-struct? exn)
+          (guard (e [#t "<err>"]) (unchecked-slot-ref exn 'message))
+          (if (message-condition? exn)
+            (let ([msg (condition-message exn)]
+                  [irr (if (irritants-condition? exn) (condition-irritants exn) '())])
+              (format "~a ~a" msg irr))
+            exn)))
+      #f])
+      (parameterize ((current-expander-allow-rebind? #t))
+        (core-expand-module-begin __cl-body __cl-ctx))
+      (let ([tbl (unchecked-slot-ref __cl-ctx 'table)])
         (and tbl (> (hash-length tbl) 0)))))))
 
 ;; D.7d-pre: Override core-import-module to use gherkin for compilation

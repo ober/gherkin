@@ -454,6 +454,8 @@ Gerbil has multi-phase compilation where `(import (for-syntax ...))` makes bindi
 
 5. **Chez `gensym`** takes a string, not a symbol (unlike Gerbil's gensym).
 
+**chez→core translator handles:** `define`, `begin`, `if`, `lambda`, `set!`, `quote`, `when`, `unless`, `cond`, `and`, `or`, `let`, `let*`, `letrec`, `letrec*`, named let, `define-syntax` (skip).
+
 **Architecture:**
 ```
 User code: (def x 42)
@@ -463,6 +465,8 @@ User code: (def x 42)
   → Returns AST-wrapped core form: (%#define-values (x) (%#quote 42))
   → Expander recognizes core form as terminal, no further expansion
 ```
+
+Uses `current-expander-allow-rebind?` to let unbound runtime symbols (like `+`, `>`, `cons`) pass through — they exist in the Chez environment but aren't registered as Gerbil runtime-bindings. Proper prelude binding still needed for full correctness.
 
 #### I.4 Bootstrap cycle
 
