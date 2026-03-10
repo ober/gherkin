@@ -2259,6 +2259,100 @@
       (let ([tbl (unchecked-slot-ref __def-ctx 'table)])
         (and tbl (> (hash-length tbl) 0)))))))
 
+;; D.7c5: Test native expansion with more complex module forms
+;; Test module with when/unless (control flow macros)
+(let ([tmp "/tmp/gherkin-test-when-module.ss"])
+  (call-with-output-file tmp
+    (lambda (p)
+      (display "(export #t)\n" p)
+      (display "(def (add a b) (+ a b))\n" p)
+      (display "(def (negate n) (- 0 n))\n" p))
+    'replace)
+  (guard (exn [#t (printf "  D.7c5-when error: ~a~n" (fmt-chez-error exn))])
+    (eval `(begin
+      (define __when-read (call-with-values (lambda () (core-read-module ,tmp)) list))
+      (define __when-body (list-ref __when-read 3))
+      (define __when-prelude (or (list-ref __when-read 0) (current-expander-module-prelude) (make-prelude-context #f)))
+      (define __when-ctx (make-module-context '__test-when-module __when-prelude
+                           "test/when-module" ,tmp)))))
+  (check "native expansion with when/control flow"
+    (eval '(guard (exn [#t
+      (printf "  D.7c5-when FAIL: ~a~n"
+        (if (gerbil-struct? exn)
+          (guard (e [#t "<err>"]) (unchecked-slot-ref exn 'message))
+          (if (message-condition? exn)
+            (let ([msg (condition-message exn)]
+                  [irr (if (irritants-condition? exn) (condition-irritants exn) '())])
+              (format "~a ~a" msg irr))
+            exn)))
+      #f])
+      (parameterize ((current-expander-allow-rebind? #t))
+        (core-expand-module-begin __when-body __when-ctx))
+      (let ([tbl (unchecked-slot-ref __when-ctx 'table)])
+        (and tbl (> (hash-length tbl) 0)))))))
+
+;; Test module with let bindings
+(let ([tmp "/tmp/gherkin-test-let-module.ss"])
+  (call-with-output-file tmp
+    (lambda (p)
+      (display "(export #t)\n" p)
+      (display "(def (add-one n) (let ([m (+ n 1)]) m))\n" p))
+    'replace)
+  (guard (exn [#t (printf "  D.7c5-let error: ~a~n" (fmt-chez-error exn))])
+    (eval `(begin
+      (define __let-read (call-with-values (lambda () (core-read-module ,tmp)) list))
+      (define __let-body (list-ref __let-read 3))
+      (define __let-prelude (or (list-ref __let-read 0) (current-expander-module-prelude) (make-prelude-context #f)))
+      (define __let-ctx (make-module-context '__test-let-module __let-prelude
+                          "test/let-module" ,tmp)))))
+  (check "native expansion with let bindings"
+    (eval '(guard (exn [#t
+      (printf "  D.7c5-let FAIL: ~a~n"
+        (if (gerbil-struct? exn)
+          (guard (e [#t "<err>"]) (unchecked-slot-ref exn 'message))
+          (if (message-condition? exn)
+            (let ([msg (condition-message exn)]
+                  [irr (if (irritants-condition? exn) (condition-irritants exn) '())])
+              (format "~a ~a" msg irr))
+            exn)))
+      #f])
+      (parameterize ((current-expander-allow-rebind? #t))
+        (core-expand-module-begin __let-body __let-ctx))
+      (let ([tbl (unchecked-slot-ref __let-ctx 'table)])
+        (and tbl (> (hash-length tbl) 0)))))))
+
+;; Test module with multiple definitions and inter-references
+(let ([tmp "/tmp/gherkin-test-multi-module.ss"])
+  (call-with-output-file tmp
+    (lambda (p)
+      (display "(export #t)\n" p)
+      (display "(def pi 3.14159)\n" p)
+      (display "(def (double x) (+ x x))\n" p)
+      (display "(def (quad x) (double (double x)))\n" p))
+    'replace)
+  (guard (exn [#t (printf "  D.7c5-multi error: ~a~n" (fmt-chez-error exn))])
+    (eval `(begin
+      (define __multi-read (call-with-values (lambda () (core-read-module ,tmp)) list))
+      (define __multi-body (list-ref __multi-read 3))
+      (define __multi-prelude (or (list-ref __multi-read 0) (current-expander-module-prelude) (make-prelude-context #f)))
+      (define __multi-ctx (make-module-context '__test-multi-module __multi-prelude
+                            "test/multi-module" ,tmp)))))
+  (check "native expansion with multiple defs"
+    (eval '(guard (exn [#t
+      (printf "  D.7c5-multi FAIL: ~a~n"
+        (if (gerbil-struct? exn)
+          (guard (e [#t "<err>"]) (unchecked-slot-ref exn 'message))
+          (if (message-condition? exn)
+            (let ([msg (condition-message exn)]
+                  [irr (if (irritants-condition? exn) (condition-irritants exn) '())])
+              (format "~a ~a" msg irr))
+            exn)))
+      #f])
+      (parameterize ((current-expander-allow-rebind? #t))
+        (core-expand-module-begin __multi-body __multi-ctx))
+      (let ([tbl (unchecked-slot-ref __multi-ctx 'table)])
+        (and tbl (> (hash-length tbl) 0)))))))
+
 ;; D.7d-pre: Override core-import-module to use gherkin for compilation
 ;; For known runtime/expander modules, return root-ctx
 ;; For unknown modules (std/*), compile with gherkin and create a module-context
