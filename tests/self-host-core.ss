@@ -2813,9 +2813,13 @@
                           (set! ok (+ ok 1))))
                       flat)
             (printf "  [ci eval: ~a ok, ~a err]~n" ok err)))
-        ;; Register in cache and return root-ctx
-        (hash-put! registry path root-ctx)
-        root-ctx)))
+        ;; Create a proper module-context so import1 can access its exports
+        (let ([mod-ctx (eval `(make-module-context
+                                ',(string->symbol path)
+                                (or (current-expander-module-prelude) (make-prelude-context #f))
+                                ,path ,path))])
+          (hash-put! registry path mod-ctx)
+          mod-ctx))))
   (inject 'core-import-module
     (case-lambda
       [(rpath)
@@ -3009,25 +3013,47 @@
     (check "stable-sort works after import" (equal? stable '(1 2 3 4 5)))))
 
 ;; D.7d3: Test native expansion of :std/sort (real standard library module)
-;; This requires core-import-module to be overridden (D.7d-pre) since
-;; :std/sort imports :std/error which has (for-syntax ...) imports.
-(let ([sort-path (string-append (getenv "HOME") "/mine/gerbil/src/std/sort.ss")])
-  (when (file-exists? sort-path)
-    (guard (exn [#t (printf "  D.7d3-read error: ~a~n" (fmt-chez-error exn))])
-      (eval `(begin
-        (define __sort-read2 (call-with-values (lambda () (core-read-module ,sort-path)) list))
-        (define __sort-body2 (list-ref __sort-read2 3))
-        (define __sort-prelude2 (or (list-ref __sort-read2 0) (current-expander-module-prelude) (make-prelude-context #f)))
-        (define __sort-ctx2 (make-module-context ':std/sort2 __sort-prelude2
-                              "std/sort" ,sort-path)))))
-    ;; Note: :std/sort uses defrules→defproc which requires compile-time macro
-    ;; execution. Currently fails with fx- on #f (uninitialized struct field in
-    ;; expander internals — likely another :init! method not compiled by gherkin).
-    ;; This is a known limitation tracked as I.3 remaining work.
-    (guard (exn [#t (void)])
-      (eval '(guard (exn [#t #f])
-        (parameterize ((current-expander-allow-rebind? #t))
-          (core-expand-module-begin __sort-body2 __sort-ctx2)))))))
+;; The import form triggers fx- on #f during module-begin expansion.
+;; This traces the exact source of the error.
+(guard (exn [#t (void)])
+  (let ([sort-path (string-append (getenv "HOME") "/mine/gerbil/src/std/sort.ss")])
+    (when (file-exists? sort-path)
+      ;; Read the module
+      (guard (exn [#t (printf "  D.7d3-read error: ~a~n" (fmt-chez-error exn))])
+        (eval `(begin
+          (define __sort-read2
+            (call-with-values (lambda () (core-read-module ,sort-path)) list))
+          (define __sort-body2 (list-ref __sort-read2 3))
+          (define __sort-prelude2
+            (or (list-ref __sort-read2 0)
+                (current-expander-module-prelude)
+                (make-prelude-context #f)))
+          (define __sort-ctx2
+            (make-module-context ':std/sort2 __sort-prelude2
+              "std/sort" ,sort-path)))))
+      ;; Diagnose: check that slot-ref works on the new module-context
+      (guard (exn [#t (printf "  D.7d3 slot-diag error: ~a~n" (fmt-chez-error exn))])
+        (eval '(let ([ctx (core-import-module ':std/error)])
+          (printf "  D.7d3 slot-ref id: ~a~n" (slot-ref ctx 'id))
+          (printf "  D.7d3 slot-ref table: ~a~n"
+            (if (hashtable? (slot-ref ctx 'table)) "hashtable" (slot-ref ctx 'table))))))
+      ;; Test: full module-begin expansion of :std/sort
+      ;; Set expander-path so include directives resolve correctly
+      (guard (exn [#t
+                (printf "  D.7d3 expand error: ~a~n"
+                  (if (message-condition? exn) (condition-message exn) exn))
+                (when (who-condition? exn)
+                  (printf "    who: ~a~n" (condition-who exn)))
+                (when (irritants-condition? exn)
+                  (printf "    irritants: ~a~n" (condition-irritants exn)))])
+        (eval `(let ([result
+                  (parameterize ((current-expander-allow-rebind? #t)
+                                 (current-expander-phi 0)
+                                 (current-import-expander-phi 0)
+                                 (current-export-expander-phi 0)
+                                 (current-expander-path (list ,sort-path)))
+                    (core-expand-module-begin __sort-body2 __sort-ctx2))])
+          (printf "  D.7d3 expansion succeeded! ~a forms~n" (length result))))))))
 
 ;; D.8: Test reading std/error module metadata
 ;; First check that core-read-module works for a file without package dependencies

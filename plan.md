@@ -38,7 +38,7 @@ We have a working cross-compiler (gherkin) and bootstrap environment:
 | Compiler (12 files) | 100% | ⚠️ Partial | `define-syntax` forms skip |
 | Module system | ✅ Loader works | ✅ **423 modules** | 9 batched subprocesses, 6 failures |
 | REPL | ✅ Works | ✅ Gerbil syntax | Uses gherkin for compilation |
-| Test suite | **665 checks** | ✅ All pass | Batched subprocess testing (no OOM) |
+| Test suite | **677 checks** | ✅ All pass | Batched subprocess testing (no OOM) |
 
 **Phase A complete**: `core-expand-expression` works — method dispatch on expander structs is fully operational. The fix required (1) injecting `##type` and `##closure?` Gambit primitives for hash table operations at eval time, and (2) replacing `{method obj}` syntax with `(call-method obj 'method)` in eval'd context constructors since `{}` isn't a Chez reader feature.
 
@@ -437,9 +437,35 @@ Gerbil has multi-phase compilation where `(import (for-syntax ...))` makes bindi
 - [x] Native expansion works for: def, export, defstruct, defrules, match, case-lambda, try/catch, let bindings, when/unless/cond, import, multiple defs
 - [x] `datum->ast` handles dotted pairs (keyword args like `struct: #t`)
 - [x] `current-expander-allow-rebind?` lets unbound runtime symbols through
+- [x] `gherkin-import-module!` returns proper `module-context` (not `root-context`) — fixes `fx-` on `#f` crash
+- [x] `current-expander-path` set for include resolution during native expansion
+- [ ] Fix slot offset issue in module-context objects (hashtable-ref on wrong slot)
 - [ ] Register runtime bindings in prelude (replace allow-rebind? workaround)
 - [ ] Module exports resolved through expander's binding tables
 - [ ] Recursive module imports through expander (not gherkin bridge)
+
+##### D.7d3: Native Expansion of `:std/sort` — IN PROGRESS
+
+**Goal:** `core-expand-module-begin` processes `:std/sort` end-to-end using the Gerbil expander (not gherkin).
+
+**Bugs found and fixed:**
+
+1. **`fx-` called on `#f` (crash in `import1`)**: Root cause was `core-import-module` returning `root-context` (3 slots: type, id, table) instead of `module-context` (12 slots). When `import1` accessed slot 9 (`export`), it read garbage/#f from the undersized struct, and `fx1-` on that #f caused the error. **Fix:** Changed `gherkin-import-module!` to create a proper `module-context` via `make-module-context` instead of returning `root-ctx`.
+
+2. **`call-with-input-file` file not found (sort-support.scm)**: Include directives in sort.ss resolved relative to CWD instead of the source file's directory. **Fix:** Added `(current-expander-path (list sort-path))` to the parameterize block around `core-expand-module-begin`.
+
+**Eliminated hypotheses for fx- crash:**
+- `import-export-expander-init!` `:init!` method — patched via `bind-method!`, error persisted
+- `current-expander-phi` parameter returning #f — verified it returns 0
+- `current-import-expander-phi` / `current-export-expander-phi` — parameterized to 0, still failed
+- Replaced parameter objects entirely — compiled closures captured old parameters
+
+**Current blocker:** `hashtable-ref` error — after the module-context fix, `slot-ref` on the new context returns `'root` (the id field value) where the `table` field (a hashtable) is expected. This is a slot offset mismatch: `unchecked-slot-ref` maps slot names through `class-type-slot-table` to numeric indices, but the indices for the newly-created `module-context` objects may not match the compiled accessor expectations.
+
+**Next steps:**
+- Debug slot layout of `make-module-context` return value vs what `import1`/`core-expand-module-begin` expect
+- Verify `class-type-slot-table` for `module-context::t` has correct name→index mapping
+- Once slot access works, native expansion of `:std/sort` should complete
 
 ##### D.7c4: Registering Prelude Macros in Expander Context — DONE
 
@@ -796,7 +822,7 @@ Use gherkin for the bootstrap (compile runtime + expander + core to Chez), then 
 | F | Bootstrap artifacts | Phase A-E | Easy | ✅ Done |
 | G | Full std library | Phase C+D | Medium | ✅ Done |
 | H | Production REPL/tooling | Phase D+E+G | Medium | ✅ Done |
-| I | Native expander bootstrap | Phase A-H | **Critical** | ⬜ |
+| I | Native expander bootstrap | Phase A-H | **Critical** | 🔄 In progress (I.3: slot offset blocker) |
 | II | Language features (match, iter, interface) | Phase I or gherkin | Hard | ⬜ |
 | III | Standard library coverage (~339 modules) | Phase II + FFI | Large | ⬜ |
 | IV | Gambit primitives (threading, ports, GC) | None | Hard | ⬜ |
@@ -839,7 +865,7 @@ The following phases established the cross-compilation bootstrap:
 | 6 | Standard library | 14 std modules loaded |
 | 7 | REPL and tooling | Working REPL with gherkin-based compilation |
 
-**Test harness:** `tests/self-host-core.ss` — 665/665 checks pass (9 batched subprocesses, 423 modules)
+**Test harness:** `tests/self-host-core.ss` — 677/677 checks pass (9 batched subprocesses, 423 modules)
 
 ---
 
