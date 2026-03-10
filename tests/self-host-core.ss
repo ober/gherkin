@@ -2129,6 +2129,68 @@
           [(and (pair? c) (eq? (car c) 'define-syntax))
            ;; define-syntax → skip (bridge doesn't handle compile-time macros yet)
            `(,__pct-begin)]
+          ;; when/unless → if with void else/then
+          [(and (pair? c) (eq? (car c) 'when))
+           `(,__pct-if ,(chez->core (cadr c))
+              (,__pct-begin ,@(map chez->core (cddr c)))
+              (,__pct-quote ,(void)))]
+          [(and (pair? c) (eq? (car c) 'unless))
+           `(,__pct-if ,(chez->core (cadr c))
+              (,__pct-quote ,(void))
+              (,__pct-begin ,@(map chez->core (cddr c))))]
+          ;; and/or → nested if
+          [(and (pair? c) (eq? (car c) 'and))
+           (let loop ([args (cdr c)])
+             (cond [(null? args) `(,__pct-quote #t)]
+                   [(null? (cdr args)) (chez->core (car args))]
+                   [else `(,__pct-if ,(chez->core (car args))
+                            ,(loop (cdr args))
+                            (,__pct-quote #f))]))]
+          [(and (pair? c) (eq? (car c) 'or))
+           (let loop ([args (cdr c)])
+             (cond [(null? args) `(,__pct-quote #f)]
+                   [(null? (cdr args)) (chez->core (car args))]
+                   [else (let ([tmp (gensym "t")])
+                           `(,__pct-call
+                              (,__pct-lambda (,tmp)
+                                (,__pct-if (,__pct-ref ,tmp)
+                                  (,__pct-ref ,tmp)
+                                  ,(loop (cdr args))))
+                              ,(chez->core (car args))))]))]
+          ;; cond → nested if
+          [(and (pair? c) (eq? (car c) 'cond))
+           (let loop ([clauses (cdr c)])
+             (cond [(null? clauses) `(,__pct-quote ,(void))]
+                   [(eq? (caar clauses) 'else)
+                    `(,__pct-begin ,@(map chez->core (cdar clauses)))]
+                   [else `(,__pct-if ,(chez->core (caar clauses))
+                            (,__pct-begin ,@(map chez->core (cdar clauses)))
+                            ,(loop (cdr clauses)))]))]
+          ;; let/let*/letrec/letrec* → core let-values forms
+          [(and (pair? c) (memq (car c) '(let let* letrec letrec*)))
+           ;; Handle both (let ((x 1)) body) and (let name ((x 1)) body) [named let]
+           (if (and (eq? (car c) 'let) (symbol? (cadr c)))
+             ;; Named let → letrec + lambda + call
+             (let ([name (cadr c)] [bindings (caddr c)] [body (cdddr c)])
+               `(,__pct-call
+                  (,__pct-lambda ()
+                    (,__pct-call
+                      (,__pct-lambda (,name)
+                        (,__pct-set! ,name
+                          (,__pct-lambda ,(map car bindings) ,@(map chez->core body)))
+                        (,__pct-call (,__pct-ref ,name) ,@(map (lambda (b) (chez->core (cadr b))) bindings)))
+                      (,__pct-quote #f)))))
+             ;; Regular let/let*/letrec/letrec*
+             (let ([core-form (case (car c)
+                                [(let) (string->symbol "%#let-values")]
+                                [(let*) (string->symbol "%#letrec*-values")]
+                                [(letrec) (string->symbol "%#letrec-values")]
+                                [(letrec*) (string->symbol "%#letrec*-values")])]
+                   [bindings (cadr c)]
+                   [body (cddr c)])
+               `(,core-form
+                  ,(map (lambda (b) (list (list (car b)) (chez->core (cadr b)))) bindings)
+                  ,@(map chez->core body))))]
           [(pair? c)
            ;; Function call → (%#call fn args...)
            `(,__pct-call ,@(map chez->core c))]
@@ -2265,8 +2327,9 @@
   (call-with-output-file tmp
     (lambda (p)
       (display "(export #t)\n" p)
-      (display "(def (add a b) (+ a b))\n" p)
-      (display "(def (negate n) (- 0 n))\n" p))
+      (display "(def (positive? n) (when (> n 0) #t))\n" p)
+      (display "(def (sign n) (cond ((> n 0) 1) ((< n 0) -1) (else 0)))\n" p)
+      (display "(def (clamp n lo hi) (and (>= n lo) (<= n hi)))\n" p))
     'replace)
   (guard (exn [#t (printf "  D.7c5-when error: ~a~n" (fmt-chez-error exn))])
     (eval `(begin
@@ -2277,14 +2340,20 @@
                            "test/when-module" ,tmp)))))
   (check "native expansion with when/control flow"
     (eval '(guard (exn [#t
-      (printf "  D.7c5-when FAIL: ~a~n"
-        (if (gerbil-struct? exn)
-          (guard (e [#t "<err>"]) (unchecked-slot-ref exn 'message))
-          (if (message-condition? exn)
-            (let ([msg (condition-message exn)]
-                  [irr (if (irritants-condition? exn) (condition-irritants exn) '())])
-              (format "~a ~a" msg irr))
-            exn)))
+      (if (gerbil-struct? exn)
+        (let ([irrs (guard (e [#t '()]) (unchecked-slot-ref exn 'irritants))])
+          (printf "  D.7c5-when FAIL: ~a where:~a irr:~a~n"
+            (guard (e [#t "<err>"]) (unchecked-slot-ref exn 'message))
+            (guard (e [#t "<n/a>"]) (unchecked-slot-ref exn 'where))
+            (map (lambda (x)
+              (cond [(AST? x) (let ([e (AST-e x)])
+                                (if (symbol? e) e (format "ast:~a" e)))]
+                    [(symbol? x) x]
+                    [else (format "~a" x)]))
+              (if (list? irrs) irrs (list irrs)))))
+        (printf "  D.7c5-when FAIL: ~a ~a~n"
+          (if (message-condition? exn) (condition-message exn) exn)
+          (if (irritants-condition? exn) (condition-irritants exn) '())))
       #f])
       (parameterize ((current-expander-allow-rebind? #t))
         (core-expand-module-begin __when-body __when-ctx))
