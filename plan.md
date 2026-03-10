@@ -433,6 +433,11 @@ Gerbil has multi-phase compilation where `(import (for-syntax ...))` makes bindi
 
 - [ ] `core-expand-module` processes a module end-to-end (no gherkin fallback)
 - [x] Core macro bindings registration approach validated (D.7c4 in self-host-core.ss)
+- [x] Bridge chez→core translator handles: define, if, lambda, case-lambda, begin, set!, quote, when, unless, cond, and, or, let/let*/letrec/letrec*, named let, define-syntax (skip)
+- [x] Native expansion works for: def, export, defstruct, defrules, match, case-lambda, try/catch, let bindings, when/unless/cond, import, multiple defs
+- [x] `datum->ast` handles dotted pairs (keyword args like `struct: #t`)
+- [x] `current-expander-allow-rebind?` lets unbound runtime symbols through
+- [ ] Register runtime bindings in prelude (replace allow-rebind? workaround)
 - [ ] Module exports resolved through expander's binding tables
 - [ ] Recursive module imports through expander (not gherkin bridge)
 
